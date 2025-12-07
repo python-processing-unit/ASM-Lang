@@ -115,9 +115,12 @@ if its argument is '0'; otherwise it returns '0'.
 
 Bitwise operators act on the binary representation of integers. 'BAND(a, b)'
 computes a bitwise AND, 'BOR(a, b)' a bitwise OR, 'BXOR(a, b)' a bitwise XOR,
-and 'BNOT(a)' the bitwise complement. The interpretation of sign and bit
-width for these operations is implementation-defined but must be consistent
-across all bitwise operators.
+and 'BNOT(a)' the bitwise complement. 'SHL(a, b)' shifts 'a' left by 'b' bits
+and 'SHR(a, b)' shifts 'a' right by 'b' bits using arithmetic right-shift
+(matching two's-complement semantics). Shift counts must be non-negative or
+execution raises a runtime error. The interpretation of sign and bit width for
+these operations is implementation-defined but must be consistent across all
+bitwise operators.
 
 Bitfield and slicing helpers: 'SLICE(a, hi, lo)' extracts the inclusive
 bit-range [hi:lo] from the binary representation of 'a' and returns it as an
@@ -368,9 +371,13 @@ The standard library is a group of modules for common use cases distributed
 with the interpreter.
 It includes modules for:
 - Collections: indexed lists of integers with efficient encoding and decoding.
+- CSPRNG: Cryptographically secure (ChaCha20) pseudorandom number generation with
+  seed management.
+- Encryption: AES-GCM and RSA-OAEP encryption and decryption utilities.
+- Hashes: SHA-256 hashing.
 - Prime: primality testing and prime number generation, along with
   factorization and other common prime utilities.
-- PRNG: pseudorandom number generation with seed management.
+- PRNG: Fast (LCG) pseudorandom number generation with seed management.
 
 10. Tracebacks and Error Reporting
 ---------------------------------
@@ -651,16 +658,18 @@ Arithmetic
 - 'CDIV(a, b)' : ceil(a / b)
 - 'POW(a, b)' : a ^ b (b >= 0)
 - 'MOD(a, b)' : remainder of a / b
- - 'NEG(a)' : -a (additive inverse)
- - 'ABS(a)' : absolute value of a
- - 'GCD(a, b)' : greatest common divisor of a and b
- - 'LCM(a, b)' : least common multiple of a and b
+- 'NEG(a)' : -a (additive inverse)
+- 'ABS(a)' : absolute value of a
+- 'GCD(a, b)' : greatest common divisor of a and b
+- 'LCM(a, b)' : least common multiple of a and b
 
 Bitwise / Boolean
 - 'BAND(a, b)' : bitwise AND
 - 'BOR(a, b)' : bitwise OR
 - 'BXOR(a, b)' : bitwise XOR
 - 'BNOT(a)' : bitwise complement
+- 'SHL(a, b)' : arithmetic shift-left of 'a' by 'b' bits (b >= 0)
+- 'SHR(a, b)' : arithmetic shift-right of 'a' by 'b' bits (b >= 0)
 - 'SLICE(a, hi, lo)' : inclusive bit-slice of 'a' from bit index 'hi' down to 'lo' (LSB index 0)
 - 'AND(a, b)' : Boolean AND -> 0 or 1
 - 'OR(a, b)' : Boolean OR -> 0 or 1

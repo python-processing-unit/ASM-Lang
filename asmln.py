@@ -65,24 +65,29 @@ class Lexer:
         self.column = 1
     def tokenize(self) -> List[Token]:
         tokens: List[Token] = []
-        while(not self._eof):
-            ch:str = self._peek()
+        # Cache frequently used methods/values locally for speed.
+        _peek = self._peek
+        _advance = self._advance
+        _is_identifier_start = self._is_identifier_start
+        symbols = SYMBOLS
+        while not self._eof:
+            ch: str = _peek()
             if(ch in " \t"):
-                self._advance()
+                _advance()
                 continue
             if(ch == "\r"):
-                self._advance()
+                _advance()
                 continue
             if(ch == "\n"):
                 tokens.append(Token("NEWLINE","\n",self.line,self.column))
-                self._advance()
+                _advance()
                 continue
             if(ch == "#"):
                 self._consume_comment()
                 continue
             if(ch in SYMBOLS):
-                tokens.append(Token(SYMBOLS[ch],ch,self.line,self.column))
-                self._advance()
+                tokens.append(Token(symbols[ch], ch, self.line, self.column))
+                _advance()
                 continue
             if(ch == "-"):
                 tokens.append(self._consume_signed_number())
@@ -90,7 +95,7 @@ class Lexer:
             if(ch in "01"):
                 tokens.append(self._consume_unsigned_number())
                 continue
-            if(self._is_identifier_start(ch)):
+            if _is_identifier_start(ch):
                 tokens.append(self._consume_identifier())
                 continue
             raise ASMParseError(f"Unexpected character '{ch}' at {self.filename}:{self.line}:{self.column}")
@@ -321,8 +326,16 @@ class Parser:
         token = self._peek()
         if(token.type == "NUMBER"):
             number:Token = self._consume("NUMBER")
-            value:int = int(number.value,2)
-            return(Literal(location=self._location_from_token(number),value=value))
+            # NUMBER token may be prefixed with '-' for negative literals.
+            sval = number.value
+            if sval.startswith("-"):
+                # safe parse of negative binary literal
+                if len(sval) == 1:
+                    raise ASMParseError(f"Invalid numeric literal at line {number.line}")
+                value = -int(sval[1:], 2)
+            else:
+                value = int(sval, 2)
+            return Literal(location=self._location_from_token(number), value=value)
         if(token.type == "IDENT"):
             ident:Token = self._consume("IDENT")
             location:SourceLocation = self._location_from_token(ident)
@@ -503,6 +516,8 @@ class Builtins:
         self._register_fixed("BOR", 2, lambda a, b: a | b)
         self._register_fixed("BXOR", 2, lambda a, b: a ^ b)
         self._register_fixed("BNOT", 1, lambda a: ~a)
+        self._register_fixed("SHL", 2, self._shift_left)
+        self._register_fixed("SHR", 2, self._shift_right)
         # Return the inclusive bit-slice [hi:lo] of `a` as an unsigned integer.
         # Bits are numbered starting at 0 for the least-significant bit.
         # Implementation note: uses masking so negative values yield their
@@ -563,7 +578,12 @@ class Builtins:
         builtin = self.table.get(name)
         if builtin is None:
             raise ASMRuntimeError(f"Unknown function '{name}'", location=location)
-        builtin.validate(len(args))
+        # Inline validation to avoid a method call in hot path.
+        supplied = len(args)
+        if supplied < builtin.min_args:
+            raise ASMRuntimeError(f"{name} expects at least {builtin.min_args} arguments", rewrite_rule=name)
+        if builtin.max_args is not None and supplied > builtin.max_args:
+            raise ASMRuntimeError(f"{name} expects at most {builtin.max_args} arguments", rewrite_rule=name)
         return builtin.impl(interpreter, args, arg_nodes, env, location)
     def _safe_div(self, a: int, b: int) -> int:
         if b == 0:
@@ -587,6 +607,16 @@ class Builtins:
         if b < 0:
             raise ASMRuntimeError("Negative exponent not supported", rewrite_rule="POW")
         return pow(a, b)
+
+    def _shift_left(self, value: int, amount: int) -> int:
+        if amount < 0:
+            raise ASMRuntimeError("SHL amount must be non-negative", rewrite_rule="SHL")
+        return value << amount
+
+    def _shift_right(self, value: int, amount: int) -> int:
+        if amount < 0:
+            raise ASMRuntimeError("SHR amount must be non-negative", rewrite_rule="SHR")
+        return value >> amount
     def _lcm(self, a: int, b: int) -> int:
         if a == 0 or b == 0:
             return 0
