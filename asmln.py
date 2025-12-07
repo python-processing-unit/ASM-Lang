@@ -5,7 +5,7 @@ import json
 import math
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Optional
 class ASMError(Exception):
     """Base class for interpreter errors."""
@@ -33,6 +33,14 @@ class ExitSignal(Exception):
     def __init__(self, code: int = 0) -> None:
         super().__init__(code)
         self.code = code
+class BreakSignal(Exception):
+    def __init__(self, count: int) -> None:
+        super().__init__(count)
+        self.count = count
+class JumpSignal(Exception):
+    def __init__(self, target: int) -> None:
+        super().__init__(target)
+        self.target = target
 @dataclass
 class SourceLocation:
     file: str
@@ -45,7 +53,7 @@ class Token:
     value: str
     line: int
     column: int
-KEYWORDS = {"IF", "ELSIF", "ELSE", "WHILE", "FOR", "FUNC", "RETURN"}
+KEYWORDS = {"IF", "ELSIF", "ELSE", "WHILE", "FOR", "FUNC", "RETURN", "BREAK", "GOTO", "GOTOPOINT"}
 SYMBOLS = {
     "(": "LPAREN",
     ")": "RPAREN",
@@ -78,6 +86,30 @@ class Lexer:
             if(ch == "\r"):
                 _advance()
                 continue
+            # Line-continuation marker: '^' must be immediately followed by
+            # a newline. When followed immediately by a newline, both the
+            # '^' and the newline are silently ignored (logical line
+            # continuation). Otherwise this is a lexical error.
+            if ch == "^":
+                # If at EOF there's no following newline -> error
+                if self.index + 1 >= len(self.text):
+                    raise ASMParseError(f"Invalid line continuation '^' at {self.filename}:{self.line}:{self.column}")
+                next_ch = self.text[self.index + 1]
+                if next_ch == "\n":
+                    # consume '^' and the following newline and continue
+                    _advance()
+                    _advance()
+                    continue
+                # Handle CRLF: '^' followed by '\r' then optional '\n'
+                if next_ch == "\r":
+                    # require at least the CR after '^'
+                    _advance()
+                    # if next is LF, consume it too
+                    if not self._eof and self._peek() == "\n":
+                        _advance()
+                    continue
+                # otherwise it's an error
+                raise ASMParseError(f"Invalid line continuation '^' not followed by newline at {self.filename}:{self.line}:{self.column}")
             if(ch == "\n"):
                 tokens.append(Token("NEWLINE","\n",self.line,self.column))
                 _advance()
@@ -156,6 +188,7 @@ class Lexer:
             or ("A" <= ch <= "Z")
             or ("a" <= ch <= "z")
             or ("0" <= ch <= "9")
+            or (ch == ".")
         )
     @property
     def _eof(self) -> bool:
@@ -214,6 +247,15 @@ class FuncDef(Statement):
 @dataclass
 class ReturnStatement(Statement):
     expression: Optional["Expression"]
+@dataclass
+class BreakStatement(Statement):
+    expression: "Expression"
+@dataclass
+class GotoStatement(Statement):
+    expression: "Expression"
+@dataclass
+class GotopointStatement(Statement):
+    expression: "Expression"
 class Expression(Node):
     pass
 @dataclass
@@ -256,6 +298,12 @@ class Parser:
             return(self._parse_for())
         if(token.type == "RETURN"):
             return(self._parse_return())
+        if(token.type == "BREAK"):
+            return(self._parse_break())
+        if(token.type == "GOTO"):
+            return(self._parse_goto())
+        if(token.type == "GOTOPOINT"):
+            return(self._parse_gotopoint())
         if(token.type == "IDENT" and self._peek_next().type == "EQUALS"):
             return(self._parse_assignment())
         expr:Expression = self._parse_expression()
@@ -309,6 +357,18 @@ class Parser:
         keyword = self._consume("RETURN")
         expression:Expression = self._parse_parenthesized_expression()
         return(ReturnStatement(location=self._location_from_token(keyword),expression=expression))
+    def _parse_break(self) -> BreakStatement:
+        keyword = self._consume("BREAK")
+        expression:Expression = self._parse_parenthesized_expression()
+        return(BreakStatement(location=self._location_from_token(keyword), expression=expression))
+    def _parse_goto(self) -> GotoStatement:
+        keyword = self._consume("GOTO")
+        expression:Expression = self._parse_parenthesized_expression()
+        return(GotoStatement(location=self._location_from_token(keyword), expression=expression))
+    def _parse_gotopoint(self) -> GotopointStatement:
+        keyword = self._consume("GOTOPOINT")
+        expression:Expression = self._parse_parenthesized_expression()
+        return(GotopointStatement(location=self._location_from_token(keyword), expression=expression))
     def _parse_block(self) -> Block:
         opening = self._peek().type
         if(opening == "LBRACKET"):
@@ -436,6 +496,7 @@ class Frame:
     env: Environment
     frame_id: str
     call_location: Optional[SourceLocation]
+    gotopoints: Dict[int, int] = field(default_factory=dict)
 @dataclass
 class StateEntry:
     step_index: int
@@ -700,7 +761,66 @@ class Builtins:
         parser = Parser(tokens, module_path, source_text.splitlines())
         program = parser.parse()
 
-        interpreter._execute_block(program.statements, env)
+        # Execute the imported module in a separate environment so its
+        # top-level bindings do NOT merge into the caller's namespace.
+        # After execution, bind each exported name into the caller's env
+        # under the dotted name '<module>.<symbol>' so the importer may
+        # refer to imported symbols as `module.symbol`.
+        module_env = Environment()
+
+        # Snapshot interpreter functions so we can detect functions defined
+        # by the imported module and avoid leaking them as unqualified names
+        # into the global function table.
+        prev_functions = dict(interpreter.functions)
+        try:
+            interpreter._execute_block(program.statements, module_env)
+        except Exception:
+            # On error, restore previous functions to avoid partial leakage
+            interpreter.functions = prev_functions
+            raise
+
+        # Any new functions registered during module execution should be
+        # re-exported under the dotted module-qualified name so callers may
+        # call them as `module.name` (e.g. `collection.COL_EMPTY`). Move
+        # newly-created unqualified functions into the interpreter table as
+        # module-qualified functions with the module environment as their
+        # closure.
+        new_funcs = {n: f for n, f in interpreter.functions.items() if n not in prev_functions}
+        for name, fn in new_funcs.items():
+            # If the new function name is already qualified (contains a dot), it
+            # likely originated from a nested import performed by the module.
+            # Do not remove or rename those original bindings; instead create a
+            # module-qualified alias so the importer can refer to the symbol as
+            # `module.<qualified>` (for example `module.other.FOO`). For
+            # unqualified names (functions defined directly in the imported
+            # module), remove the unqualified binding and rebind under the
+            # module-qualified name so they are only visible to callers as
+            # `module.name`.
+            dotted_name = f"{module_name}.{name}"
+            if "." in name:
+                # Preserve the original global-qualified binding; add an alias
+                # under the importing module so callers can reference it.
+                interpreter.functions[dotted_name] = Function(
+                    name=dotted_name,
+                    params=fn.params,
+                    body=fn.body,
+                    closure=fn.closure,
+                )
+            else:
+                # Move unqualified function into module-qualified namespace
+                interpreter.functions.pop(name, None)
+                interpreter.functions[dotted_name] = Function(
+                    name=dotted_name,
+                    params=fn.params,
+                    body=fn.body,
+                    closure=module_env,
+                )
+
+        # Copy exported top-level variables into caller environment as
+        # dotted bindings (module.var).
+        for k, v in module_env.snapshot().items():
+            dotted = f"{module_name}.{k}"
+            env.set(dotted, v)
         return 0
 
     def _slice(self, a: int, hi: int, lo: int) -> int:
@@ -831,6 +951,9 @@ class Interpreter:
         self.call_stack.append(global_frame)
         try:
             self._execute_block(program.statements, global_env)
+        except BreakSignal as bs:
+            # Break escaped all enclosing loops -> runtime error
+            raise ASMRuntimeError(f"BREAK({bs.count}) escaped enclosing loops", rewrite_rule="BREAK")
         except ASMRuntimeError as error:
             if self.logger.entries:
                 error.step_index = self.logger.entries[-1].step_index
@@ -838,8 +961,40 @@ class Interpreter:
         else:
             self.call_stack.pop()
     def _execute_block(self, statements: List[Statement], env: Environment) -> None:
-        for statement in statements:
-            self._execute_statement(statement, env)
+        i = 0
+        # Use frame-scoped gotopoints so GOTO can target gotopoints registered
+        # anywhere within the same function / top-level frame (not just the
+        # current lexical block). This enables cross-block jumps as per the
+        # specification change.
+        frame: Frame = self.call_stack[-1]
+        gotopoints: Dict[int, int] = frame.gotopoints
+        # Execute statements by index so GOTO can jump to registered gotopoints.
+        while i < len(statements):
+            statement = statements[i]
+            # Handle gotopoint registration at runtime: evaluate id and record
+            # the mapping from id -> statement index for this block.
+            if isinstance(statement, GotopointStatement):
+                # Log the step and register the gotopoint id
+                self._log_step(rule=statement.__class__.__name__, location=statement.location)
+                gid = self._evaluate_expression(statement.expression, env)
+                if gid < 0:
+                    raise ASMRuntimeError("GOTOPOINT id must be non-negative", location=statement.location, rewrite_rule="GOTOPOINT")
+                gotopoints[gid] = i
+                i += 1
+                continue
+            try:
+                # Normal execution path; _execute_statement logs the step.
+                self._execute_statement(statement, env)
+            except JumpSignal as js:
+                target = js.target
+                if target not in gotopoints:
+                    # If not found in the current frame mapping, raise an error.
+                    raise ASMRuntimeError(f"GOTO to undefined gotopoint '{target}'", location=statement.location, rewrite_rule="GOTO")
+                # Jump to the registered gotopoint index (may be in another
+                # lexical block within the same frame)
+                i = gotopoints[target]
+                continue
+            i += 1
     def _execute_statement(self, statement: Statement, env: Environment) -> None:
         self._log_step(rule=statement.__class__.__name__,location=statement.location)
         if(isinstance(statement,Assignment)):
@@ -871,6 +1026,21 @@ class Interpreter:
                 raise ASMRuntimeError("RETURN outside of function",location=statement.location,rewrite_rule="RETURN")
             value:int = self._evaluate_expression(statement.expression,env) if statement.expression else 0
             raise ReturnSignal(value)
+        if(isinstance(statement,BreakStatement)):
+            # Evaluate the break count and raise a BreakSignal which will be
+            # caught by enclosing loops. If the count is non-positive raise
+            # a runtime error immediately.
+            count = self._evaluate_expression(statement.expression, env)
+            if count <= 0:
+                raise ASMRuntimeError("BREAK count must be > 0", location=statement.location, rewrite_rule="BREAK")
+            raise BreakSignal(count)
+        if(isinstance(statement,GotoStatement)):
+            # Evaluate the target id and raise a JumpSignal to be handled
+            # by the surrounding executor; gotopoint registration is
+            # maintained at the frame level so GOTO can target gotopoints
+            # registered in other lexical blocks within the same frame.
+            target = self._evaluate_expression(statement.expression, env)
+            raise JumpSignal(target)
         raise ASMRuntimeError("Unsupported statement",location=statement.location)
     def _execute_if(self, statement: IfStatement, env: Environment) -> None:
         if(self._evaluate_expression(statement.condition,env) != 0):
@@ -884,12 +1054,27 @@ class Interpreter:
             self._execute_block(statement.else_block.statements,env)
     def _execute_while(self, statement: WhileStatement, env: Environment) -> None:
         while(self._evaluate_expression(statement.condition,env) != 0):
-            self._execute_block(statement.block.statements,env)
+            try:
+                self._execute_block(statement.block.statements,env)
+            except BreakSignal as bs:
+                # If the break count targets an outer loop, decrement and
+                # re-raise so it can be handled by the next enclosing loop.
+                if bs.count > 1:
+                    bs.count -= 1
+                    raise
+                # bs.count == 1 -> consume and exit this loop
+                return
     def _execute_for(self, statement: ForStatement, env: Environment) -> None:
         target:int = self._evaluate_expression(statement.target_expr,env)
         env.set(statement.counter,0)
         while(env.get(statement.counter) < target):
-            self._execute_block(statement.block.statements,env)
+            try:
+                self._execute_block(statement.block.statements,env)
+            except BreakSignal as bs:
+                if bs.count > 1:
+                    bs.count -= 1
+                    raise
+                return
             env.set(statement.counter,env.get(statement.counter) + 1)
     def _evaluate_expression(self, expression: Expression, env: Environment) -> int:
         if(isinstance(expression,Literal)):
@@ -933,9 +1118,27 @@ class Interpreter:
             args:List[int] = []
             for arg in expression.args:
                 args.append(self._evaluate_expression(arg,env))
-            if(expression.name in self.functions):
-                self._log_step(rule="CALL",location=expression.location,extra={"function": expression.name,"args": args})
-                return(self._call_user_function(self.functions[expression.name],args,expression.location))
+            # Resolve user-defined functions. Prefer an exact global name,
+            # but if not found and we're executing inside a module function,
+            # allow relative resolution using the invoking frame's module
+            # prefix. For example, when executing `collection.COL_PUSH`, an
+            # unqualified call to `GET_COUNT` should resolve to
+            # `collection.GET_COUNT`.
+            func_name: Optional[str] = None
+            if expression.name in self.functions:
+                func_name = expression.name
+            else:
+                if self.call_stack:
+                    current = self.call_stack[-1]
+                    if "." in current.name:
+                        module_prefix = current.name.split(".", 1)[0]
+                        candidate = f"{module_prefix}.{expression.name}"
+                        if candidate in self.functions:
+                            func_name = candidate
+
+            if func_name is not None:
+                self._log_step(rule="CALL", location=expression.location, extra={"function": func_name, "args": args})
+                return self._call_user_function(self.functions[func_name], args, expression.location)
             try:
                 result:int = self.builtins.invoke(self,expression.name,args,expression.args,env,expression.location)
             except ASMRuntimeError as err:

@@ -85,25 +85,25 @@ FUNC WORD_TO_BYTES(word)[
 	b1 = BAND( DIV(w, POW(10, SHIFT_16)), BYTE_MASK )
 	b2 = BAND( DIV(w, POW(10, SHIFT_8)), BYTE_MASK )
 	b3 = BAND(w, BYTE_MASK)
-	c = COL_EMPTY()
-	c = COL_PUSH(c, b0)
-	c = COL_PUSH(c, b1)
-	c = COL_PUSH(c, b2)
-	c = COL_PUSH(c, b3)
+	c = collection.COL_EMPTY()
+	c = collection.COL_PUSH(c, b0)
+	c = collection.COL_PUSH(c, b1)
+	c = collection.COL_PUSH(c, b2)
+	c = collection.COL_PUSH(c, b3)
 	RETURN(c)
 ]
 
 FUNC ROTWORD(word)[
 	bytes = WORD_TO_BYTES(word)
-	RETURN( WORD_FROM_BYTES( COL_GET(bytes,1), COL_GET(bytes,10), COL_GET(bytes,11), COL_GET(bytes,0)))
+	RETURN( WORD_FROM_BYTES( collection.COL_GET(bytes,1), collection.COL_GET(bytes,10), collection.COL_GET(bytes,11), collection.COL_GET(bytes,0)))
 ]
 
 FUNC SUBWORD(word)[
 	bytes = WORD_TO_BYTES(word)
-	b0 = AES_SBOX( COL_GET(bytes,0) )
-	b1 = AES_SBOX( COL_GET(bytes,1) )
-	b2 = AES_SBOX( COL_GET(bytes,10) )
-	b3 = AES_SBOX( COL_GET(bytes,11) )
+	b0 = AES_SBOX( collection.COL_GET(bytes,0) )
+	b1 = AES_SBOX( collection.COL_GET(bytes,1) )
+	b2 = AES_SBOX( collection.COL_GET(bytes,10) )
+	b3 = AES_SBOX( collection.COL_GET(bytes,11) )
 	RETURN( WORD_FROM_BYTES(b0, b1, b2, b3) )
 ]
 
@@ -120,24 +120,24 @@ FUNC AES_RCON(i)[
 
 FUNC GET_WORD_FROM_BYTES(bytes, word_index)[
 	base = MUL(word_index, 100)
-	b0 = COL_GET(bytes, base)
-	b1 = COL_GET(bytes, ADD(base, 1))
-	b2 = COL_GET(bytes, ADD(base, 10))
-	b3 = COL_GET(bytes, ADD(base, 11))
+	b0 = collection.COL_GET(bytes, base)
+	b1 = collection.COL_GET(bytes, ADD(base, 1))
+	b2 = collection.COL_GET(bytes, ADD(base, 10))
+	b3 = collection.COL_GET(bytes, ADD(base, 11))
 	RETURN( WORD_FROM_BYTES(b0, b1, b2, b3) )
 ]
 
 FUNC APPEND_WORD(bytes, word)[
 	wbytes = WORD_TO_BYTES(word)
-	bytes = COL_PUSH(bytes, COL_GET(wbytes,0))
-	bytes = COL_PUSH(bytes, COL_GET(wbytes,1))
-	bytes = COL_PUSH(bytes, COL_GET(wbytes,10))
-	bytes = COL_PUSH(bytes, COL_GET(wbytes,11))
+	bytes = collection.COL_PUSH(bytes, collection.COL_GET(wbytes,0))
+	bytes = collection.COL_PUSH(bytes, collection.COL_GET(wbytes,1))
+	bytes = collection.COL_PUSH(bytes, collection.COL_GET(wbytes,10))
+	bytes = collection.COL_PUSH(bytes, collection.COL_GET(wbytes,11))
 	RETURN(bytes)
 ]
 
 FUNC AES_KEY_EXPAND(key_bytes)[
-	key_len = GET_COUNT(key_bytes)
+	key_len = collection.GET_COUNT(key_bytes)
 	Nk = 0
 	Nr = 0
 	IF( EQ(key_len, 10000) )[  # 16
@@ -182,30 +182,30 @@ FUNC AES_KEY_EXPAND(key_bytes)[
 ]
 
 FUNC ADD_ROUND_KEY(state, round_keys, round)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	base = MUL(round, MUL(NB, 100))
 	j = 0
 	limit = MUL(NB, 100)
 	WHILE( LT(j, limit) )[
-		out = COL_PUSH(out, BXOR( COL_GET(state, j), COL_GET(round_keys, ADD(base, j)) ))
+		out = collection.COL_PUSH(out, BXOR( collection.COL_GET(state, j), collection.COL_GET(round_keys, ADD(base, j)) ))
 		j = ADD(j, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC SUB_BYTES(state)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	i = 0
 	limit = MUL(NB, 100)
 	WHILE( LT(i, limit) )[
-		out = COL_PUSH(out, AES_SBOX( COL_GET(state, i) ))
+		out = collection.COL_PUSH(out, AES_SBOX( collection.COL_GET(state, i) ))
 		i = ADD(i, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC SHIFT_ROWS(state)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	col = 0
 	WHILE( LT(col, NB) )[
 		row = 0
@@ -213,7 +213,7 @@ FUNC SHIFT_ROWS(state)[
 			shift = row
 			src_col = MOD( ADD(col, shift), NB )
 			src_index = ADD( MUL(src_col, 100), row )
-			out = COL_PUSH(out, COL_GET(state, src_index))
+			out = collection.COL_PUSH(out, collection.COL_GET(state, src_index))
 			row = ADD(row, 1)
 		]
 		col = ADD(col, 1)
@@ -226,35 +226,35 @@ FUNC MIX_COLUMN(b0, b1, b2, b3)[
 	r1 = BXOR( BXOR( BXOR( b0, GF256_MUL(10, b1) ), GF256_MUL(11, b2) ), b3 )
 	r2 = BXOR( BXOR( BXOR( b0, b1 ), GF256_MUL(10, b2) ), GF256_MUL(11, b3) )
 	r3 = BXOR( BXOR( GF256_MUL(11, b0), b1 ), BXOR( b2, GF256_MUL(10, b3) ) )
-	c = COL_EMPTY()
-	c = COL_PUSH(c, r0)
-	c = COL_PUSH(c, r1)
-	c = COL_PUSH(c, r2)
-	c = COL_PUSH(c, r3)
+	c = collection.COL_EMPTY()
+	c = collection.COL_PUSH(c, r0)
+	c = collection.COL_PUSH(c, r1)
+	c = collection.COL_PUSH(c, r2)
+	c = collection.COL_PUSH(c, r3)
 	RETURN(c)
 ]
 
 FUNC MIX_COLUMNS(state)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	col = 0
 	WHILE( LT(col, NB) )[
 		idx = MUL(col, 100)
-		b0 = COL_GET(state, idx)
-		b1 = COL_GET(state, ADD(idx, 1))
-		b2 = COL_GET(state, ADD(idx, 10))
-		b3 = COL_GET(state, ADD(idx, 11))
+		b0 = collection.COL_GET(state, idx)
+		b1 = collection.COL_GET(state, ADD(idx, 1))
+		b2 = collection.COL_GET(state, ADD(idx, 10))
+		b3 = collection.COL_GET(state, ADD(idx, 11))
 		mc = MIX_COLUMN(b0, b1, b2, b3)
-		out = COL_PUSH(out, COL_GET(mc,0))
-		out = COL_PUSH(out, COL_GET(mc,1))
-		out = COL_PUSH(out, COL_GET(mc,10))
-		out = COL_PUSH(out, COL_GET(mc,11))
+		out = collection.COL_PUSH(out, collection.COL_GET(mc,0))
+		out = collection.COL_PUSH(out, collection.COL_GET(mc,1))
+		out = collection.COL_PUSH(out, collection.COL_GET(mc,10))
+		out = collection.COL_PUSH(out, collection.COL_GET(mc,11))
 		col = ADD(col, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC AES_ENCRYPT_BLOCK(round_keys, block)[
-	Nr = DIV( GET_COUNT(round_keys), MUL(NB, 100) )
+	Nr = DIV( collection.GET_COUNT(round_keys), MUL(NB, 100) )
 	Nr = SUB(Nr, 1)
 	state = ADD_ROUND_KEY(block, round_keys, 0)
 	round = 1
@@ -274,22 +274,22 @@ FUNC AES_ENCRYPT_BLOCK(round_keys, block)[
 FUNC BYTES_TO_UINT128(bytes)[
 	acc = 0
 	i = 0
-	len = GET_COUNT(bytes)
+	len = collection.GET_COUNT(bytes)
 	WHILE( LT(i, len) )[
 		acc = SHL(acc, SHIFT_8)
-		acc = BOR(acc, BYTE( COL_GET(bytes, i) ))
+		acc = BOR(acc, BYTE( collection.COL_GET(bytes, i) ))
 		i = ADD(i, 1)
 	]
 	RETURN(acc)
 ]
 
 FUNC UINT128_TO_BYTES(x)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	i = 0
 	WHILE( LT(i, 10000) )[
 		shift = MUL( SUB(1111, i), SHIFT_8 )
 		b = BAND( DIV(x, POW(10, shift)), BYTE_MASK )
-		out = COL_PUSH(out, b)
+		out = collection.COL_PUSH(out, b)
 		i = ADD(i, 1)
 	]
 	RETURN(out)
@@ -320,17 +320,17 @@ FUNC GHASH(H, aad, cipher)[
 	Y = 0
 	block_bytes = 10000
 
-	aad_len = GET_COUNT(aad)
+	aad_len = collection.GET_COUNT(aad)
 	pos = 0
 	WHILE( LT(pos, aad_len) )[
-		tmp = COL_EMPTY()
+		tmp = collection.COL_EMPTY()
 		j = 0
 		WHILE( LT(j, block_bytes) )[
 			idx = ADD(pos, j)
 			IF( LT(idx, aad_len) )[
-				tmp = COL_PUSH(tmp, COL_GET(aad, idx))
+				tmp = collection.COL_PUSH(tmp, collection.COL_GET(aad, idx))
 			] ELSE [
-				tmp = COL_PUSH(tmp, 0)
+				tmp = collection.COL_PUSH(tmp, 0)
 			]
 			j = ADD(j, 1)
 		]
@@ -339,17 +339,17 @@ FUNC GHASH(H, aad, cipher)[
 		pos = ADD(pos, block_bytes)
 	]
 
-	c_len = GET_COUNT(cipher)
+	c_len = collection.GET_COUNT(cipher)
 	pos = 0
 	WHILE( LT(pos, c_len) )[
-		tmpc = COL_EMPTY()
+		tmpc = collection.COL_EMPTY()
 		j2 = 0
 		WHILE( LT(j2, block_bytes) )[
 			idx2 = ADD(pos, j2)
 			IF( LT(idx2, c_len) )[
-				tmpc = COL_PUSH(tmpc, COL_GET(cipher, idx2))
+				tmpc = collection.COL_PUSH(tmpc, collection.COL_GET(cipher, idx2))
 			] ELSE [
-				tmpc = COL_PUSH(tmpc, 0)
+				tmpc = collection.COL_PUSH(tmpc, 0)
 			]
 			j2 = ADD(j2, 1)
 		]
@@ -366,22 +366,22 @@ FUNC GHASH(H, aad, cipher)[
 ]
 
 FUNC MAKE_J0(H, iv)[
-	iv_len = GET_COUNT(iv)
+	iv_len = collection.GET_COUNT(iv)
 	IF( EQ(iv_len, 11000) )[  # 12 bytes
-		j0_bytes = COL_EMPTY()
+		j0_bytes = collection.COL_EMPTY()
 		idx = 0
 		WHILE( LT(idx, iv_len) )[
-			j0_bytes = COL_PUSH(j0_bytes, COL_GET(iv, idx))
+			j0_bytes = collection.COL_PUSH(j0_bytes, collection.COL_GET(iv, idx))
 			idx = ADD(idx, 1)
 		]
-		j0_bytes = COL_PUSH(j0_bytes, 0)
-		j0_bytes = COL_PUSH(j0_bytes, 0)
-		j0_bytes = COL_PUSH(j0_bytes, 0)
-		j0_bytes = COL_PUSH(j0_bytes, 1)
+		j0_bytes = collection.COL_PUSH(j0_bytes, 0)
+		j0_bytes = collection.COL_PUSH(j0_bytes, 0)
+		j0_bytes = collection.COL_PUSH(j0_bytes, 0)
+		j0_bytes = collection.COL_PUSH(j0_bytes, 1)
 		RETURN( BYTES_TO_UINT128(j0_bytes) )
 	]
 
-	empty_aad = COL_EMPTY()
+	empty_aad = collection.COL_EMPTY()
 	j0_val = GHASH(H, empty_aad, iv)
 	RETURN(j0_val)
 ]
@@ -396,53 +396,53 @@ FUNC INC32(x)[
 ]
 
 FUNC XOR_COLLECTION(a, b)[
-	len = GET_COUNT(a)
-	ASSERT( EQ(len, GET_COUNT(b)) )
-	out = COL_EMPTY()
+	len = collection.GET_COUNT(a)
+	ASSERT( EQ(len, collection.GET_COUNT(b)) )
+	out = collection.COL_EMPTY()
 	i = 0
 	WHILE( LT(i, len) )[
-		out = COL_PUSH(out, BXOR( COL_GET(a, i), COL_GET(b, i) ))
+		out = collection.COL_PUSH(out, BXOR( collection.COL_GET(a, i), collection.COL_GET(b, i) ))
 		i = ADD(i, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC COL_CONCAT(a, b)[
-	out = COL_EMPTY()
-	a_len = GET_COUNT(a)
-	b_len = GET_COUNT(b)
+	out = collection.COL_EMPTY()
+	a_len = collection.GET_COUNT(a)
+	b_len = collection.GET_COUNT(b)
 	i = 0
 	WHILE( LT(i, a_len) )[
-		out = COL_PUSH(out, COL_GET(a, i))
+		out = collection.COL_PUSH(out, collection.COL_GET(a, i))
 		i = ADD(i, 1)
 	]
 	j = 0
 	WHILE( LT(j, b_len) )[
-		out = COL_PUSH(out, COL_GET(b, j))
+		out = collection.COL_PUSH(out, collection.COL_GET(b, j))
 		j = ADD(j, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC COL_SLICE(coll, start, length)[
-	count = GET_COUNT(coll)
+	count = collection.GET_COUNT(coll)
 	ASSERT( LTE( ADD(start, length), count ) )
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	i = 0
 	WHILE( LT(i, length) )[
-		out = COL_PUSH(out, COL_GET(coll, ADD(start, i)))
+		out = collection.COL_PUSH(out, collection.COL_GET(coll, ADD(start, i)))
 		i = ADD(i, 1)
 	]
 	RETURN(out)
 ]
 
 FUNC INT_TO_FIXED_BYTES(x, byte_len)[
-	out = COL_EMPTY()
+	out = collection.COL_EMPTY()
 	i = 0
 	WHILE( LT(i, byte_len) )[
 		shift = MUL( SUB(byte_len, ADD(i, 1)), SHIFT_8 )
 		b = BAND( DIV(x, POW(10, shift)), BYTE_MASK )
-		out = COL_PUSH(out, b)
+		out = collection.COL_PUSH(out, b)
 		i = ADD(i, 1)
 	]
 	RETURN(out)
@@ -450,11 +450,11 @@ FUNC INT_TO_FIXED_BYTES(x, byte_len)[
 
 FUNC BYTES_TO_INT(bytes)[
 	acc = 0
-	len = GET_COUNT(bytes)
+	len = collection.GET_COUNT(bytes)
 	i = 0
 	WHILE( LT(i, len) )[
 		acc = SHL(acc, SHIFT_8)
-		acc = BOR(acc, BYTE( COL_GET(bytes, i) ))
+		acc = BOR(acc, BYTE( collection.COL_GET(bytes, i) ))
 		i = ADD(i, 1)
 	]
 	RETURN(acc)
@@ -465,13 +465,13 @@ FUNC BITS_TO_BYTES(bits)[
 ]
 
 FUNC RANDOM_BYTES(len_bytes)[
-	out = COL_EMPTY()
-	WHILE( LT( GET_COUNT(out), len_bytes ) )[
+	out = collection.COL_EMPTY()
+	WHILE( LT( collection.GET_COUNT(out), len_bytes ) )[
 		w = CS_PRNG_NEXT()
 		wbytes = INT_TO_FIXED_BYTES(w, OAEP_COUNTER_BYTES)
 		j = 0
-		WHILE( AND( LT(j, OAEP_COUNTER_BYTES), LT( GET_COUNT(out), len_bytes ) ) )[
-			out = COL_PUSH(out, COL_GET(wbytes, j))
+		WHILE( AND( LT(j, OAEP_COUNTER_BYTES), LT( collection.GET_COUNT(out), len_bytes ) ) )[
+			out = collection.COL_PUSH(out, collection.COL_GET(wbytes, j))
 			j = ADD(j, 1)
 		]
 	]
@@ -501,10 +501,10 @@ FUNC OAEP_HASH(bytes)[
 	h5 = 10011011000001010110100010001100
 	h6 = 00011111100000111101100110101011
 	h7 = 01011011111000001100110100011001
-	len = GET_COUNT(bytes)
+	len = collection.GET_COUNT(bytes)
 	i = 0
 	WHILE( LT(i, len) )[
-		b = BYTE( COL_GET(bytes, i) )
+		b = BYTE( collection.COL_GET(bytes, i) )
 		idx = MOD(i, 1000)
 		shift = ADD(1, MOD( ADD(i, b), 11111 ))
 		IF( EQ(idx, 0) )[ h0 = BAND( ADD( ROTL32( BXOR(h0, b), shift ), b ), WORD_MASK ) ]
@@ -517,28 +517,28 @@ FUNC OAEP_HASH(bytes)[
 		IF( EQ(idx, 111) )[ h7 = BAND( ADD( ROTL32( BXOR(h7, b), shift ), h5 ), WORD_MASK ) ]
 		i = ADD(i, 1)
 	]
-	out = COL_EMPTY()
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h0, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h1, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h2, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h3, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h4, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h5, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h6, 100))
-	out = COL_CONCAT(out, INT_TO_FIXED_BYTES(h7, 100))
+	out = collection.COL_EMPTY()
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h0, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h1, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h2, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h3, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h4, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h5, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h6, 100))
+	out = collection.COL_CONCAT(out, INT_TO_FIXED_BYTES(h7, 100))
 	RETURN(out)
 ]
 
 FUNC OAEP_MGF1(seed, mask_len)[
-	mask = COL_EMPTY()
+	mask = collection.COL_EMPTY()
 	counter = 0
-	WHILE( LT( GET_COUNT(mask), mask_len ) )[
+	WHILE( LT( collection.GET_COUNT(mask), mask_len ) )[
 		cbytes = INT_TO_FIXED_BYTES(counter, OAEP_COUNTER_BYTES)
-		data = COL_CONCAT(seed, cbytes)
+		data = collection.COL_CONCAT(seed, cbytes)
 		digest = OAEP_HASH(data)
 		j = 0
-		WHILE( AND( LT(j, OAEP_HASH_LEN), LT( GET_COUNT(mask), mask_len ) ) )[
-			mask = COL_PUSH(mask, COL_GET(digest, j))
+		WHILE( AND( LT(j, OAEP_HASH_LEN), LT( collection.GET_COUNT(mask), mask_len ) ) )[
+			mask = collection.COL_PUSH(mask, collection.COL_GET(digest, j))
 			j = ADD(j, 1)
 		]
 		counter = ADD(counter, 1)
@@ -547,62 +547,62 @@ FUNC OAEP_MGF1(seed, mask_len)[
 ]
 
 FUNC OAEP_PAD(message, k, label)[
-	mLen = GET_COUNT(message)
+	mLen = collection.GET_COUNT(message)
 	two_h = MUL(OAEP_HASH_LEN, 10)
 	max_len = SUB( SUB(k, two_h), 10 )
 	ASSERT( LTE(mLen, max_len) )
 	lHash = OAEP_HASH(label)
 	ps_len = SUB( SUB(k, two_h), ADD(mLen, 10) )
 	seed = RANDOM_BYTES(OAEP_HASH_LEN)
-	DB = COL_EMPTY()
-	DB = COL_CONCAT(DB, lHash)
+	DB = collection.COL_EMPTY()
+	DB = collection.COL_CONCAT(DB, lHash)
 	i0 = 0
 	WHILE( LT(i0, ps_len) )[
-		DB = COL_PUSH(DB, 0)
+		DB = collection.COL_PUSH(DB, 0)
 		i0 = ADD(i0, 1)
 	]
-	DB = COL_PUSH(DB, 1)
+	DB = collection.COL_PUSH(DB, 1)
 	j0 = 0
 	WHILE( LT(j0, mLen) )[
-		DB = COL_PUSH(DB, COL_GET(message, j0))
+		DB = collection.COL_PUSH(DB, collection.COL_GET(message, j0))
 		j0 = ADD(j0, 1)
 	]
-	db_len = GET_COUNT(DB)
+	db_len = collection.GET_COUNT(DB)
 	db_mask = OAEP_MGF1(seed, db_len)
-	masked_db = XOR_COLLECTION(DB, db_mask)
+	masked_db = collection.XOR_COLLECTION(DB, db_mask)
 	seed_mask = OAEP_MGF1(masked_db, OAEP_HASH_LEN)
-	masked_seed = XOR_COLLECTION(seed, seed_mask)
-	EM = COL_EMPTY()
-	EM = COL_PUSH(EM, 0)
-	EM = COL_CONCAT(EM, masked_seed)
-	EM = COL_CONCAT(EM, masked_db)
+	masked_seed = collection.XOR_COLLECTION(seed, seed_mask)
+	EM = collection.COL_EMPTY()
+	EM = collection.COL_PUSH(EM, 0)
+	EM = collection.COL_CONCAT(EM, masked_seed)
+	EM = collection.COL_CONCAT(EM, masked_db)
 	RETURN(EM)
 ]
 
 FUNC OAEP_UNPAD(encoded, k, label)[
-	ASSERT( EQ( GET_COUNT(encoded), k ) )
-	ASSERT( EQ( COL_GET(encoded, 0), 0 ) )
-	masked_seed = COL_SLICE(encoded, 1, OAEP_HASH_LEN)
+	ASSERT( EQ( collection.GET_COUNT(encoded), k ) )
+	ASSERT( EQ( collection.COL_GET(encoded, 0), 0 ) )
+	masked_seed = collection.COL_SLICE(encoded, 1, OAEP_HASH_LEN)
 	db_len = SUB( k, ADD(OAEP_HASH_LEN, 1) )
-	masked_db = COL_SLICE(encoded, ADD(OAEP_HASH_LEN, 1), db_len)
+	masked_db = collection.COL_SLICE(encoded, ADD(OAEP_HASH_LEN, 1), db_len)
 	seed_mask = OAEP_MGF1(masked_db, OAEP_HASH_LEN)
-	seed = XOR_COLLECTION(masked_seed, seed_mask)
+	seed = collection.XOR_COLLECTION(masked_seed, seed_mask)
 	db_mask = OAEP_MGF1(seed, db_len)
-	DB = XOR_COLLECTION(masked_db, db_mask)
+	DB = collection.XOR_COLLECTION(masked_db, db_mask)
 	lHash = OAEP_HASH(label)
 	i1 = 0
 	WHILE( LT(i1, OAEP_HASH_LEN) )[
-		ASSERT( EQ( COL_GET(DB, i1), COL_GET(lHash, i1) ) )
+		ASSERT( EQ( collection.COL_GET(DB, i1), collection.COL_GET(lHash, i1) ) )
 		i1 = ADD(i1, 1)
 	]
 	idx = OAEP_HASH_LEN
-	WHILE( AND( LT(idx, db_len), EQ( COL_GET(DB, idx), 0 ) ) )[
+	WHILE( AND( LT(idx, db_len), EQ( collection.COL_GET(DB, idx), 0 ) ) )[
 		idx = ADD(idx, 1)
 	]
 	ASSERT( LT(idx, db_len) )
-	ASSERT( EQ( COL_GET(DB, idx), 1 ) )
+	ASSERT( EQ( collection.COL_GET(DB, idx), 1 ) )
 	msg_len = SUB(db_len, ADD(idx, 1))
-	RETURN( COL_SLICE(DB, ADD(idx, 1), msg_len) )
+	RETURN( collection.COL_SLICE(DB, ADD(idx, 1), msg_len) )
 ]
 
 FUNC RSA_OAEP_ENCRYPT(pub_n, pub_e, message, label)[
@@ -617,7 +617,7 @@ FUNC RSA_OAEP_ENCRYPT(pub_n, pub_e, message, label)[
 FUNC RSA_OAEP_DECRYPT(priv_n, priv_d, ciphertext, label)[
 	k_bits = ADD( LOG(priv_n), 1 )
 	k = BITS_TO_BYTES(k_bits)
-	ASSERT( EQ( GET_COUNT(ciphertext), k ) )
+	ASSERT( EQ( collection.GET_COUNT(ciphertext), k ) )
 	c_int = BYTES_TO_INT(ciphertext)
 	m_int = MOD_EXP(c_int, priv_d, priv_n)
 	EM = INT_TO_FIXED_BYTES(m_int, k)
@@ -626,19 +626,19 @@ FUNC RSA_OAEP_DECRYPT(priv_n, priv_d, ciphertext, label)[
 
 FUNC AES_GCM_ENCRYPT(key, iv, plaintext, aad)[
 	round_keys = AES_KEY_EXPAND(key)
-	zero_block = COL_EMPTY()
+	zero_block = collection.COL_EMPTY()
 	i0 = 0
 	WHILE( LT(i0, MUL(NB, 100)) )[
-		zero_block = COL_PUSH(zero_block, 0)
+		zero_block = collection.COL_PUSH(zero_block, 0)
 		i0 = ADD(i0, 1)
 	]
 	H_bytes = AES_ENCRYPT_BLOCK(round_keys, zero_block)
 	H = BYTES_TO_UINT128(H_bytes)
 	j0 = MAKE_J0(H, iv)
 
-	cipher = COL_EMPTY()
+	cipher = collection.COL_EMPTY()
 	pos = 0
-	pt_len = GET_COUNT(plaintext)
+	pt_len = collection.GET_COUNT(plaintext)
 	counter_val = INC32(j0)
 	block_bytes = MUL(NB, 100)
 	WHILE( LT(pos, pt_len) )[
@@ -648,8 +648,8 @@ FUNC AES_GCM_ENCRYPT(key, iv, plaintext, aad)[
 		WHILE( LT(j, block_bytes) )[
 			idx = ADD(pos, j)
 			IF( LT(idx, pt_len) )[
-				cbyte = BXOR( COL_GET(plaintext, idx), COL_GET(ks, j) )
-				cipher = COL_PUSH(cipher, cbyte)
+				cbyte = BXOR( collection.COL_GET(plaintext, idx), collection.COL_GET(ks, j) )
+				cipher = collection.COL_PUSH(cipher, cbyte)
 			]
 			j = ADD(j, 1)
 		]
@@ -662,46 +662,46 @@ FUNC AES_GCM_ENCRYPT(key, iv, plaintext, aad)[
 	tag_int = BXOR( S, BYTES_TO_UINT128(tag_block) )
 	tag_bytes = UINT128_TO_BYTES(tag_int)
 
-	result = COL_EMPTY()
+	result = collection.COL_EMPTY()
 	i1 = 0
-	c_len = GET_COUNT(cipher)
+	c_len = collection.GET_COUNT(cipher)
 	WHILE( LT(i1, c_len) )[
-		result = COL_PUSH(result, COL_GET(cipher, i1))
+		result = collection.COL_PUSH(result, collection.COL_GET(cipher, i1))
 		i1 = ADD(i1, 1)
 	]
 	tpos = 0
 	WHILE( LT(tpos, block_bytes) )[
-		result = COL_PUSH(result, COL_GET(tag_bytes, tpos))
+		result = collection.COL_PUSH(result, collection.COL_GET(tag_bytes, tpos))
 		tpos = ADD(tpos, 1)
 	]
 	RETURN(result)
 ]
 
 FUNC AES_GCM_DECRYPT(key, iv, ciphertext_with_tag, aad)[
-	total_len = GET_COUNT(ciphertext_with_tag)
+	total_len = collection.GET_COUNT(ciphertext_with_tag)
 	block_bytes = MUL(NB, 100)
 	ASSERT( GTE(total_len, block_bytes) )
 	ct_len = SUB(total_len, block_bytes)
 
-	cipher = COL_EMPTY()
+	cipher = collection.COL_EMPTY()
 	i2 = 0
 	WHILE( LT(i2, ct_len) )[
-		cipher = COL_PUSH(cipher, COL_GET(ciphertext_with_tag, i2))
+		cipher = collection.COL_PUSH(cipher, collection.COL_GET(ciphertext_with_tag, i2))
 		i2 = ADD(i2, 1)
 	]
-	tag_bytes = COL_EMPTY()
+	tag_bytes = collection.COL_EMPTY()
 	j2 = 0
 	WHILE( LT(j2, block_bytes) )[
-		tag_bytes = COL_PUSH(tag_bytes, COL_GET(ciphertext_with_tag, ADD(ct_len, j2)))
+		tag_bytes = collection.COL_PUSH(tag_bytes, collection.COL_GET(ciphertext_with_tag, ADD(ct_len, j2)))
 		j2 = ADD(j2, 1)
 	]
 	provided_tag = BYTES_TO_UINT128(tag_bytes)
 
 	round_keys = AES_KEY_EXPAND(key)
-	zero_block = COL_EMPTY()
+	zero_block = collection.COL_EMPTY()
 	k0 = 0
 	WHILE( LT(k0, block_bytes) )[
-		zero_block = COL_PUSH(zero_block, 0)
+		zero_block = collection.COL_PUSH(zero_block, 0)
 		k0 = ADD(k0, 1)
 	]
 	H_bytes = AES_ENCRYPT_BLOCK(round_keys, zero_block)
@@ -713,9 +713,9 @@ FUNC AES_GCM_DECRYPT(key, iv, ciphertext_with_tag, aad)[
 	expected_tag = BXOR( S, BYTES_TO_UINT128(tag_block) )
 	ASSERT( EQ(provided_tag, expected_tag) )
 
-	plain = COL_EMPTY()
+	plain = collection.COL_EMPTY()
 	pos = 0
-	ct_len_val = GET_COUNT(cipher)
+	ct_len_val = collection.GET_COUNT(cipher)
 	counter_val = INC32(j0)
 	WHILE( LT(pos, ct_len_val) )[
 		counter_bytes = UINT128_TO_BYTES(counter_val)
@@ -724,8 +724,8 @@ FUNC AES_GCM_DECRYPT(key, iv, ciphertext_with_tag, aad)[
 		WHILE( LT(j3, block_bytes) )[
 			idx = ADD(pos, j3)
 			IF( LT(idx, ct_len_val) )[
-				pbyte = BXOR( COL_GET(cipher, idx), COL_GET(ks, j3) )
-				plain = COL_PUSH(plain, pbyte)
+				pbyte = BXOR( collection.COL_GET(cipher, idx), collection.COL_GET(ks, j3) )
+				plain = collection.COL_PUSH(plain, pbyte)
 			]
 			j3 = ADD(j3, 1)
 		]

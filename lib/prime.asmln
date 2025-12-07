@@ -47,21 +47,21 @@ FUNC IS_MERSENNE_PRIME(p)[
     ]
 ]
 FUNC FACTOR(n)[
-    coll = COL_EMPTY()
+    coll = collection.COL_EMPTY()
     IF(LTE(n,1))[
         RETURN(coll)
     ]
     p = 10
     WHILE(LTE(MUL(p,p), n))[
         IF(EQ(MOD(n,p), 0))[
-            coll = COL_PUSH(coll, p)
+            coll = collection.COL_PUSH(coll, p)
             n = DIV(n, p)
         ] ELSE [
             p = NEXT_PRIME( ADD(p, 1) )
         ]
     ]
     IF(GT(n,1))[
-        coll = COL_PUSH(coll, n)
+        coll = collection.COL_PUSH(coll, n)
     ]
     RETURN(coll)
 ]
