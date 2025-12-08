@@ -19,7 +19,20 @@ class Token:
     column: int
 
 
-KEYWORDS = {"IF", "ELSIF", "ELSE", "WHILE", "FOR", "FUNC", "RETURN", "BREAK", "GOTO", "GOTOPOINT", "CONTINUE"}
+KEYWORDS = {
+    "IF",
+    "ELSIF",
+    "ELSE",
+    "WHILE",
+    "FOR",
+    "FUNC",
+    "RETURN",
+    "BREAK",
+    "CONTINUE",
+    "GOTO",
+    "GOTOPOINT"
+}
+
 SYMBOLS = {
     "(": "LPAREN",
     ")": "RPAREN",
@@ -138,10 +151,11 @@ class Lexer:
         return Token(token_type, value, line, col)
 
     def _is_identifier_start(self, ch: str) -> bool:
-        return (ch == "_") or ("A" <= ch <= "Z") or ("a" <= ch <= "z")
+        return (ch in "abcdefghijklmnopqrstuvwxyz23456789;/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|:<>?")
 
     def _is_identifier_part(self, ch: str) -> bool:
-        return (ch == "_") or ("A" <= ch <= "Z") or ("a" <= ch <= "z") or (ch in "01")
+        return (ch in "abcdefghijklmnopqrstuvwxyz1234567890;./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|:<>?")
+        # "." is not actually a valid character in namespace symbols, but is allowed since it is used to separate module names from namespace symbols.
 
     def _consume_line_continuation(self) -> None:
         if self.index + 1 >= len(self.text):

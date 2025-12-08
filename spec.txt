@@ -84,16 +84,39 @@ functions share a single identifier space, so a given name cannot
 simultaneously denote both. A user-defined function name must not conflict
 with the name of any built-in operator or function (see Section 4.1).
 
-Identifier character set (clarification): The first character of an
-identifier MUST be an ASCII letter (A–Z or a–z) or underscore ('_').
-Subsequent characters MAY be ASCII letters, underscore, or the binary
-digits '0' and '1' only. Decimal digits other than '0' and '1' (that is,
-'2'..'9') and the dot character '.' are NOT permitted inside identifiers.
-Identifiers therefore cannot contain '.' (dot) and may not include any
-non-binary digits; this preserves an unambiguous lexical distinction
-between binary integer literals and identifiers, and prevents confusion
-with module-qualified names (which are formed by a separate dotted name
-syntax documented elsewhere in this specification).
+Identifier character set (clarification): The (non-empty) sequence of
+characters that forms an identifier is determined by the following rules,
+which match the reference lexer implementation:
+
+- The first character MUST NOT be '0' or '1'. Any other non-ASCII
+  character is disallowed, but otherwise the lexer permits a broad set of
+  ASCII punctuation and symbol characters in addition to letters and
+  digits. In particular, the following characters are valid as the first
+  character of an identifier:
+
+  - Lowercase letters 'a'–'z'
+  - Uppercase letters 'A'–'Z'
+  - Decimal digits '2'–'9'
+  - The punctuation and symbol characters
+    `; / ! @ $ % & ~ _ + | : < > ?`
+
+- Subsequent characters in an identifier may be any of the following:
+
+  - Lowercase letters 'a'–'z'
+  - Uppercase letters 'A'–'Z'
+  - Decimal digits '0'–'9'
+  - The punctuation and symbol characters
+    `; . / ! @ $ % & ~ _ + | : < > ?`
+
+  As noted above, non-ASCII characters remain disallowed, and the
+  delimiter characters '{', '}', '[', ']', '(', ')', '=', ',', and '#'
+  are never permitted inside identifiers.
+
+This deliberately-permissive identifier character set preserves an
+unambiguous lexical distinction between binary integer literals (which
+must begin with '0' or '1') and identifiers, while allowing module-
+qualified names and other symbolic conventions to be expressed directly
+as plain identifiers in source code.
 
 
 3. Data Model
