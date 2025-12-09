@@ -109,7 +109,7 @@ which match the reference lexer implementation:
   - Uppercase letters 'A'–'Z'
   - Decimal digits '0'–'9'
   - The punctuation and symbol characters
-    '; . / ! @ $ % & ~ _ + | < > ?'
+    '; / ! @ $ % & ~ _ + | < > ?'
 
   As noted above, non-ASCII characters remain disallowed, and the
   delimiter characters '{', '}', '[', ']', '(', ')', '=', ',', and '#'
