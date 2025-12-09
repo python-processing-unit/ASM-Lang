@@ -74,9 +74,16 @@ class ForStatement(Statement):
 @dataclass
 class FuncDef(Statement):
     name: str
-    params: List[Tuple[str, str]]
+    params: List["Param"]
     return_type: str
     body: Block
+
+
+@dataclass
+class Param:
+    type: str
+    name: str
+    default: Optional["Expression"]
 
 
 @dataclass
@@ -122,7 +129,13 @@ class Identifier(Expression):
 @dataclass
 class CallExpression(Expression):
     name: str
-    args: List[Expression]
+    args: List["CallArgument"]
+
+
+@dataclass
+class CallArgument:
+    name: Optional[str]
+    expression: Expression
 
 
 class Parser:
@@ -189,12 +202,21 @@ class Parser:
         keyword = self._consume("FUNC")
         name_token = self._consume("IDENT")
         self._consume("LPAREN")
-        params: List[Tuple[str, str]] = []
+        params: List[Param] = []
+        seen_default = False
         if self._peek().type != "RPAREN":
             while True:
                 type_token = self._consume_type_token()
                 self._consume("COLON")
-                params.append((type_token.value, self._consume("IDENT").value))
+                name_tok = self._consume("IDENT")
+                default_expr: Optional[Expression] = None
+                if self._match("EQUALS"):
+                    seen_default = True
+                    default_expr = self._parse_expression()
+                elif seen_default:
+                    raise ASMParseError(
+                        f"Positional parameter cannot follow parameter with default at line {name_tok.line}")
+                params.append(Param(type=type_token.value, name=name_tok.value, default=default_expr))
                 if not self._match("COMMA"):
                     break
         self._consume("RPAREN")
@@ -298,10 +320,21 @@ class Parser:
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
             if self._match("LPAREN"):
-                args: List[Expression] = []
+                args: List[CallArgument] = []
+                seen_kw = False
                 if self._peek().type != "RPAREN":
                     while True:
-                        args.append(self._parse_expression())
+                        if self._peek().type == "IDENT" and self._peek_next().type == "EQUALS":
+                            name_tok = self._consume("IDENT")
+                            self._consume("EQUALS")
+                            arg_expr = self._parse_expression()
+                            seen_kw = True
+                            args.append(CallArgument(name=name_tok.value, expression=arg_expr))
+                        else:
+                            if seen_kw:
+                                raise ASMParseError(
+                                    f"Positional argument cannot follow keyword argument at line {self._peek().line}")
+                            args.append(CallArgument(name=None, expression=self._parse_expression()))
                         if not self._match("COMMA"):
                             break
                 self._consume("RPAREN")

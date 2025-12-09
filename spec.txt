@@ -403,22 +403,37 @@ remain deterministic.
 ------------
 
 Functions are defined using the 'FUNC' keyword with explicit parameter and
-return types. The canonical form is
+return types. The canonical positional-only form is
  'FUNC name(T1:arg1, T2:arg2, ..., TN:argN):R[ block ]' or
  'FUNC name(T1:arg1, ..., TN:argN):R{ block }', where each 'Tk' and 'R' is
- either 'INT' or 'STR'. Defining a function binds 'name' to a callable body
- with the specified typed formal parameters. Function names must not
- conflict with the names of built-in operators or functions.
+ either 'INT' or 'STR'. Parameters may also declare a call-time default
+ value using 'Tk:arg=expr'. A parameter without a default is positional; a
+ parameter with a default is keyword-capable. Positional parameters must
+ appear before any parameters with defaults. Defining a function binds
+ 'name' to a callable body with the specified typed formal parameters.
+Function names must not conflict with the names of built-in operators or
+functions.
 
 A user-defined function is called with the same syntax as a built-in:
-'name(expr1, expr2, ..., exprN)'. Arguments are evaluated left-to-right and
-must match the declared parameter types exactly; type mismatches raise a
-runtime error. The function body executes in a new environment (activation
-record) that closes over the defining environment. If a 'RETURN(v)'
-statement is executed, the function terminates immediately and yields 'v';
-the returned value must match the declared return type. If control reaches
-the end of the body without 'RETURN', the function returns a default value
-of the declared return type (0 for INT, "" for STR).
+'name(expr1, expr2, ..., exprN)'. Calls may supply zero or more positional
+arguments (left-to-right) followed by zero or more keyword arguments of the
+form 'param=expr'. Keyword arguments can only appear after all positional
+arguments. At the call site, every positional argument is bound to the
+next positional parameter; keyword arguments must match the name of a
+parameter that declared a default value. Duplicate keyword names, supplying
+too many positional arguments, or providing a keyword for an unknown
+parameter are runtime errors. If a keyword-capable parameter is omitted
+from the call, its default expression is evaluated at call time in the
+function's lexical environment after earlier parameters have been bound.
+The evaluated default must match the parameter's declared type. Built-in
+functions do not accept keyword arguments; attempting to pass one raises a
+runtime error. Arguments are evaluated left-to-right. The function body
+executes in a new environment (activation record) that closes over the
+defining environment. If a 'RETURN(v)' statement is executed, the function
+terminates immediately and yields 'v'; the returned value must match the
+declared return type. If control reaches the end of the body without
+'RETURN', the function returns a default value of the declared return type
+(0 for INT, "" for STR).
 
 Built-in operators and functions can be viewed as pre-defined functions
 provided by the runtime environment. User-defined functions share the same
@@ -745,6 +760,9 @@ Function / Operator Signatures (expression position)
   coerce to an integer when needed
 - 'PRINT(a1, a2, ..., aN)' : prints INT/STR arguments (side-effect), return
   value discarded
+- 'RUN(s)' : Run a string as an ASM-Lang program within the current environment;
+- 'UPPER(s)' : STR -> uppercase STR; error if 's' is INT
+- 'LOWER(s)' : STR -> lowercase STR; error if 's' is INT
 - 'ASSERT(a)' : crashes if 'INT-style' truthiness of 'a' is 0
 - 'MAIN()' : 1 if executing in the primary program file, else 0 when in
   imported code
@@ -824,7 +842,8 @@ Control / Function / Statement Signatures (statement position)
 - 'FOR(counter, target)[ block ]' : 'counter' initialized to 0, loop until
   counter >= target
 - 'FUNC name(T1:arg1, T2:arg2, ..., TN:argN):R[ block ]' : typed function
-  definition with return type R
+  definition with return type R; optional defaults use 'Tk:arg=expr' and must
+  appear only after all positional parameters
 - 'RETURN(a)' : return from function with value 'a'
 - 'BREAK(n)' : break out of the innermost 'n' enclosing loops; raises a
   runtime error if 'n' ≤ 0 or if 'n' is greater than the current loop nesting
@@ -846,4 +865,8 @@ Notes
   non-zero as true; STR is false when empty and true when non-empty unless a
   rule explicitly converts via 'INT'.
 - Argument evaluation order: left-to-right.
-- User-defined functions use the same call syntax as built-ins.
+- User-defined functions use the same call syntax as built-ins; keyword
+  arguments are permitted only after positional arguments and only for
+  parameters that declare defaults. Built-ins reject keyword arguments. When
+  a keyword parameter is omitted, its default expression is evaluated at call
+  time in the function's defining environment.

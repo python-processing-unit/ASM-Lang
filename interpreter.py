@@ -13,6 +13,7 @@ from parser import (
     Assignment,
     Block,
     BreakStatement,
+    CallArgument,
     CallExpression,
     Expression,
     ExpressionStatement,
@@ -24,6 +25,7 @@ from parser import (
     IfBranch,
     IfStatement,
     Literal,
+    Param,
     Parser,
     Program,
     ReturnStatement,
@@ -155,8 +157,7 @@ class Environment:
 @dataclass
 class Function:
     name: str
-    params: List[str]
-    param_types: List[str]
+    params: List[Param]
     return_type: str
     body: Block
     closure: Environment
@@ -295,6 +296,7 @@ class Builtins:
         self._register_custom("MAIN", 0, 0, self._main)
         self._register_custom("OS", 0, 0, self._os)
         self._register_custom("IMPORT", 1, 1, self._import)
+        self._register_custom("RUN", 1, 1, self._run)
         self._register_custom("INPUT", 0, 0, self._input)
         self._register_custom("PRINT", 0, None, self._print)
         self._register_custom("ASSERT", 1, 1, self._assert)
@@ -707,7 +709,6 @@ class Builtins:
                 interpreter.functions[dotted_name] = Function(
                     name=dotted_name,
                     params=fn.params,
-                    param_types=fn.param_types,
                     return_type=fn.return_type,
                     body=fn.body,
                     closure=fn.closure,
@@ -717,7 +718,6 @@ class Builtins:
                 interpreter.functions[dotted_name] = Function(
                     name=dotted_name,
                     params=fn.params,
-                    param_types=fn.param_types,
                     return_type=fn.return_type,
                     body=fn.body,
                     closure=module_env,
@@ -726,6 +726,29 @@ class Builtins:
         for k, v in module_env.values.items():
             dotted = f"{module_name}.{k}"
             env.set(dotted, v, declared_type=v.type)
+        return Value(TYPE_INT, 0)
+
+    def _run(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        env: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # RUN(source): execute the provided source code string within the
+        # current environment (mutating `env` and `interpreter.functions`).
+        source_text = self._expect_str(args[0], "RUN", location)
+        run_filename = location.file if location and location.file else "<run>"
+
+        lexer = Lexer(source_text, run_filename)
+        tokens = lexer.tokenize()
+        parser = Parser(tokens, run_filename, source_text.splitlines())
+        program = parser.parse()
+
+        # Execute parsed statements in the caller's environment so that
+        # assignments and function definitions are visible to the caller.
+        interpreter._execute_block(program.statements, env)
         return Value(TYPE_INT, 0)
 
     def _input(
@@ -1061,12 +1084,9 @@ class Interpreter:
                 raise ASMRuntimeError(
                     f"Function name '{statement.name}' conflicts with built-in", location=statement.location
                 )
-            param_types = [ptype for ptype, _ in statement.params]
-            param_names = [pname for _, pname in statement.params]
             self.functions[statement.name] = Function(
                 name=statement.name,
-                params=param_names,
-                param_types=param_types,
+                params=statement.params,
                 return_type=statement.return_type,
                 body=statement.body,
                 closure=env,
@@ -1180,27 +1200,49 @@ class Interpreter:
                 raise
         if isinstance(expression, CallExpression):
             if expression.name == "IMPORT":
-                module_label = expression.args[0].name if (expression.args and isinstance(expression.args[0], Identifier)) else None
+                if any(arg.name for arg in expression.args):
+                    raise ASMRuntimeError("IMPORT does not accept keyword arguments", location=expression.location, rewrite_rule="IMPORT")
+                first_expr = expression.args[0].expression if expression.args else None
+                module_label = first_expr.name if isinstance(first_expr, Identifier) else None
                 dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
+                arg_nodes = [arg.expression for arg in expression.args]
                 try:
-                    result = self.builtins.invoke(self, expression.name, dummy_args, expression.args, env, expression.location)
+                    result = self.builtins.invoke(self, expression.name, dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
                     self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "status": "error"})
                     raise
                 self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "result": result.value})
                 return result
             if expression.name in ("DEL", "EXIST"):
+                if any(arg.name for arg in expression.args):
+                    raise ASMRuntimeError(
+                        f"{expression.name} does not accept keyword arguments",
+                        location=expression.location,
+                        rewrite_rule=expression.name,
+                    )
                 dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
+                arg_nodes = [arg.expression for arg in expression.args]
                 try:
-                    result = self.builtins.invoke(self, expression.name, dummy_args, expression.args, env, expression.location)
+                    result = self.builtins.invoke(self, expression.name, dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
                     self._log_step(rule=expression.name, location=expression.location, extra={"args": None, "status": "error"})
                     raise
                 self._log_step(rule=expression.name, location=expression.location, extra={"args": None, "result": result.value})
                 return result
-            args: List[Value] = []
+            positional_args: List[Value] = []
+            keyword_args: Dict[str, Value] = {}
             for arg in expression.args:
-                args.append(self._evaluate_expression(arg, env))
+                value = self._evaluate_expression(arg.expression, env)
+                if arg.name is None:
+                    positional_args.append(value)
+                else:
+                    if arg.name in keyword_args:
+                        raise ASMRuntimeError(
+                            f"Duplicate keyword argument '{arg.name}'",
+                            location=expression.location,
+                            rewrite_rule=expression.name,
+                        )
+                    keyword_args[arg.name] = value
             func_name: Optional[str] = None
             if expression.name in self.functions:
                 func_name = expression.name
@@ -1213,32 +1255,120 @@ class Interpreter:
                         if candidate in self.functions:
                             func_name = candidate
             if func_name is not None:
-                self._log_step(rule="CALL", location=expression.location, extra={"function": func_name, "args": [a.value for a in args]})
-                return self._call_user_function(self.functions[func_name], args, expression.location)
+                self._log_step(
+                    rule="CALL",
+                    location=expression.location,
+                    extra={
+                        "function": func_name,
+                        "positional": [a.value for a in positional_args],
+                        "keyword": {k: v.value for k, v in keyword_args.items()},
+                    },
+                )
+                return self._call_user_function(
+                    self.functions[func_name],
+                    positional_args,
+                    keyword_args,
+                    expression.location,
+                )
             try:
-                result = self.builtins.invoke(self, expression.name, args, expression.args, env, expression.location)
+                if keyword_args:
+                    raise ASMRuntimeError(
+                        f"{expression.name} does not accept keyword arguments",
+                        location=expression.location,
+                        rewrite_rule=expression.name,
+                    )
+                arg_nodes = [a.expression for a in expression.args]
+                result = self.builtins.invoke(self, expression.name, positional_args, arg_nodes, env, expression.location)
             except ASMRuntimeError:
-                self._log_step(rule=expression.name, location=expression.location, extra={"args": [a.value for a in args], "status": "error"})
+                self._log_step(
+                    rule=expression.name,
+                    location=expression.location,
+                    extra={
+                        "args": [a.value for a in positional_args],
+                        "keyword": {k: v.value for k, v in keyword_args.items()},
+                        "status": "error",
+                    },
+                )
                 raise
-            self._log_step(rule=expression.name, location=expression.location, extra={"args": [a.value for a in args], "result": result.value})
+            self._log_step(
+                rule=expression.name,
+                location=expression.location,
+                extra={
+                    "args": [a.value for a in positional_args],
+                    "keyword": {k: v.value for k, v in keyword_args.items()},
+                    "result": result.value,
+                },
+            )
             return result
         raise ASMRuntimeError("Unsupported expression", location=expression.location)
 
-    def _call_user_function(self, function: Function, args: List[Value], call_location: SourceLocation) -> Value:
-        if len(args) != len(function.params):
+    def _call_user_function(
+        self,
+        function: Function,
+        positional_args: List[Value],
+        keyword_args: Dict[str, Value],
+        call_location: SourceLocation,
+    ) -> Value:
+        if len(positional_args) > len(function.params):
             raise ASMRuntimeError(
-                f"Function {function.name} expects {len(function.params)} arguments but received {len(args)}",
+                f"Function {function.name} expects at most {len(function.params)} positional arguments but received {len(positional_args)}",
                 location=call_location,
+                rewrite_rule=function.name,
             )
+
         env = Environment(parent=function.closure)
-        for param_name, param_type, arg in zip(function.params, function.param_types, args):
-            if arg.type != param_type:
+
+        kwds = dict(keyword_args)
+
+        for param, arg in zip(function.params, positional_args):
+            if arg.type != param.type:
                 raise ASMRuntimeError(
-                    f"Argument for '{param_name}' expected {param_type} but got {arg.type}",
+                    f"Argument for '{param.name}' expected {param.type} but got {arg.type}",
                     location=call_location,
                     rewrite_rule=function.name,
                 )
-            env.set(param_name, arg, declared_type=param_type)
+            env.set(param.name, arg, declared_type=param.type)
+
+        remaining_params = function.params[len(positional_args) :]
+        for param in remaining_params:
+            if param.name in kwds:
+                if param.default is None:
+                    raise ASMRuntimeError(
+                        f"Parameter '{param.name}' does not accept keyword arguments",
+                        location=call_location,
+                        rewrite_rule=function.name,
+                    )
+                value = kwds.pop(param.name)
+                if value.type != param.type:
+                    raise ASMRuntimeError(
+                        f"Argument for '{param.name}' expected {param.type} but got {value.type}",
+                        location=call_location,
+                        rewrite_rule=function.name,
+                    )
+                env.set(param.name, value, declared_type=param.type)
+                continue
+            if param.default is None:
+                raise ASMRuntimeError(
+                    f"Missing required argument '{param.name}' for function {function.name}",
+                    location=call_location,
+                    rewrite_rule=function.name,
+                )
+            default_value = self._evaluate_expression(param.default, env)
+            if default_value.type != param.type:
+                raise ASMRuntimeError(
+                    f"Default for '{param.name}' expected {param.type} but got {default_value.type}",
+                    location=call_location,
+                    rewrite_rule=function.name,
+                )
+            env.set(param.name, default_value, declared_type=param.type)
+
+        if kwds:
+            unexpected = ", ".join(sorted(kwds.keys()))
+            raise ASMRuntimeError(
+                f"Unexpected keyword arguments: {unexpected}",
+                location=call_location,
+                rewrite_rule=function.name,
+            )
         frame = self._new_frame(function.name, env, call_location)
         self.call_stack.append(frame)
         try:
