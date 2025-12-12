@@ -1,4 +1,5 @@
 """ASM-Lang entry point and REPL wiring."""
+
 from __future__ import annotations
 import argparse
 import sys

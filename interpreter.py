@@ -5,9 +5,12 @@ import math
 import os
 import sys
 import platform
+import tempfile
 import codecs
+import numpy as np
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from numpy.typing import NDArray
 
 from lexer import ASMError, ASMParseError, Lexer
 from parser import (
@@ -44,11 +47,13 @@ TYPE_INT = "INT"
 TYPE_STR = "STR"
 TYPE_TNS = "TNS"
 
+# On Windows, command lines over a certain length cause CreateProcess errors
+WINDOWS_COMMAND_LENGTH_LIMIT = 8000
 
 @dataclass(frozen=True)
 class Tensor:
     shape: List[int]
-    data: List["Value"]
+    data: NDArray[Any]
 
 
 @dataclass
@@ -445,6 +450,30 @@ class Builtins:
         assert isinstance(value.value, Tensor)
         return value.value
 
+    def _extract_powershell_body(self, cmd: str) -> Optional[str]:
+        """Best-effort extraction of the script text passed to -Command.
+
+        This keeps the heavy script contents out of the CreateProcess command
+        line by allowing us to emit it into a temporary .ps1 file instead.
+        """
+        lower = cmd.lower()
+        idx = lower.find("-command")
+        if idx == -1:
+            return None
+        tail = cmd[idx + len("-command") :].lstrip()
+        if not tail:
+            return None
+        if tail[0] in ('"', "'"):
+            quote = tail[0]
+            tail = tail[1:]
+            end = tail.find(quote)
+            if end == -1:
+                return None
+            return tail[:end]
+        # Fallback: take the next token
+        parts = tail.split(None, 1)
+        return parts[0] if parts else None
+
     def _as_bool_value(self, value: Value) -> int:
         if value.type == TYPE_INT:
             return 0 if value.value == 0 else 1
@@ -452,7 +481,7 @@ class Builtins:
             return 0 if value.value == "" else 1
         if value.type == TYPE_TNS:
             assert isinstance(value.value, Tensor)
-            return 1 if any(self._as_bool_value(item) for item in value.value.data) else 0
+            return 1 if any(self._as_bool_value(item) for item in value.value.data.flat) else 0
         return 0
 
     def _condition_from_value(self, value: Value) -> int:
@@ -1237,7 +1266,7 @@ class Builtins:
         if len(tensor.shape) != 1:
             raise ASMRuntimeError(f"{rule} shape must be a 1D tensor", location=location, rewrite_rule=rule)
         dims: List[int] = []
-        for entry in tensor.data:
+        for entry in tensor.data.flat:
             dim = self._expect_int(entry, rule, location)
             if dim <= 0:
                 raise ASMRuntimeError("Tensor dimensions must be positive", location=location, rewrite_rule=rule)
@@ -1249,22 +1278,24 @@ class Builtins:
     def _map_tensor_int_binary(self, x: Tensor, y: Tensor, rule: str, location: SourceLocation, op: Callable[[int, int], int]) -> Tensor:
         if x.shape != y.shape:
             raise ASMRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
-        data: List[Value] = []
-        for a, b in zip(x.data, y.data):
-            ai = self._expect_int(a, rule, location)
-            bi = self._expect_int(b, rule, location)
-            data.append(Value(TYPE_INT, op(ai, bi)))
+        data = np.array(
+            [
+                Value(TYPE_INT, op(self._expect_int(a, rule, location), self._expect_int(b, rule, location)))
+                for a, b in zip(x.data.flat, y.data.flat)
+            ],
+            dtype=object,
+        )
         return Tensor(shape=list(x.shape), data=data)
 
     def _map_tensor_int_scalar(self, tensor: Tensor, scalar: int, rule: str, location: SourceLocation, op: Callable[[int, int], int]) -> Tensor:
-        data: List[Value] = []
-        for entry in tensor.data:
-            val = self._expect_int(entry, rule, location)
-            data.append(Value(TYPE_INT, op(val, scalar)))
+        data = np.array(
+            [Value(TYPE_INT, op(self._expect_int(entry, rule, location), scalar)) for entry in tensor.data.flat],
+            dtype=object,
+        )
         return Tensor(shape=list(tensor.shape), data=data)
 
     def _ensure_tensor_ints(self, tensor: Tensor, rule: str, location: SourceLocation) -> None:
-        for entry in tensor.data:
+        for entry in tensor.data.flat:
             self._expect_int(entry, rule, location)
 
     # Tensor built-ins
@@ -1277,7 +1308,7 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         tensor = self._expect_tns(args[0], "SHAPE", location)
-        shape_data = [Value(TYPE_INT, dim) for dim in tensor.shape]
+        shape_data = np.array([Value(TYPE_INT, dim) for dim in tensor.shape], dtype=object)
         return Value(TYPE_TNS, Tensor(shape=[len(shape_data)], data=shape_data))
 
     def _tlen(
@@ -1304,9 +1335,12 @@ class Builtins:
     ) -> Value:
         tensor = self._expect_tns(args[0], "FILL", location)
         fill_value = args[1]
-        if any(entry.type != fill_value.type for entry in tensor.data):
+        if any(entry.type != fill_value.type for entry in tensor.data.flat):
             raise ASMRuntimeError("FILL value type must match existing tensor element types", location=location, rewrite_rule="FILL")
-        new_data = [Value(fill_value.type, fill_value.value) for _ in tensor.data]
+        new_data = np.array(
+            [Value(fill_value.type, fill_value.value) for _ in range(tensor.data.size)],
+            dtype=object,
+        )
         return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=new_data))
 
     def _tns(
@@ -1473,18 +1507,62 @@ class Builtins:
         # Capture stdout/stderr so the REPL can display results without
         # spawning a visible console window on Windows.
         cmd = self._expect_str(args[0], "CL", location)
+        cleanup_script: Optional[str] = None
         try:
             # Use text mode for captured output.
-            run_kwargs = {"shell": True, "stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+            run_kwargs: Dict[str, object] = {"stdout": subprocess.PIPE, "stderr": subprocess.PIPE, "text": True}
+            # Default to shell=True to preserve existing behaviour for string commands.
+            run_kwargs["shell"] = True
+
             # On Windows, avoid creating a visible console window for subprocesses.
             if platform.system().lower().startswith("win"):
                 run_kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
-            completed = subprocess.run(cmd, **run_kwargs)
+
+            command_to_run: Union[str, List[str]] = cmd
+            if platform.system().lower().startswith("win") and len(cmd) > WINDOWS_COMMAND_LENGTH_LIMIT:
+                stripped = cmd.lstrip()
+                prefix = stripped.split(None, 1)[0].lower() if stripped else ""
+
+                # If this is a PowerShell command, lift the -Command payload into
+                # a temporary .ps1 to avoid CreateProcess length limits.
+                if prefix in {"powershell", "pwsh"}:
+                    ps_body = self._extract_powershell_body(cmd)
+                    if ps_body is not None:
+                        fd, script_path = tempfile.mkstemp(suffix=".ps1", text=True)
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            f.write(ps_body)
+                        cleanup_script = script_path
+                        command_to_run = [prefix, "-NoProfile", "-File", script_path]
+                        run_kwargs["shell"] = False
+                    else:
+                        # Fall back to the generic .cmd approach if parsing failed.
+                        fd, script_path = tempfile.mkstemp(suffix=".cmd", text=True)
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            f.write(cmd)
+                        cleanup_script = script_path
+                        command_to_run = ["cmd", "/c", script_path]
+                        run_kwargs["shell"] = False
+                else:
+                    # Generic long-command fallback: write to .cmd and execute it.
+                    fd, script_path = tempfile.mkstemp(suffix=".cmd", text=True)
+                    with os.fdopen(fd, "w", encoding="utf-8") as f:
+                        f.write(cmd)
+                    cleanup_script = script_path
+                    command_to_run = ["cmd", "/c", script_path]
+                    run_kwargs["shell"] = False
+
+            completed = subprocess.run(command_to_run, **run_kwargs)
             code = completed.returncode
             out = completed.stdout or ""
             err = completed.stderr or ""
         except OSError as exc:
             raise ASMRuntimeError(f"CL failed: {exc}", location=location, rewrite_rule="CL")
+        finally:
+            if cleanup_script:
+                try:
+                    os.unlink(cleanup_script)
+                except OSError:
+                    pass
 
         # Record the CL event for deterministic logging/replay, including captured output.
         interpreter.io_log.append({"event": "CL", "cmd": cmd, "code": code, "stdout": out, "stderr": err})
@@ -1662,6 +1740,16 @@ class Interpreter:
                     location=statement.location,
                     rewrite_rule="ASSIGN",
                 )
+
+            # Respect identifier freezing: element assignment is still a form of reassignment.
+            env_found = env._find_env(base_expr.name)
+            if env_found is not None and (base_expr.name in env_found.frozen or base_expr.name in env_found.permafrozen):
+                raise ASMRuntimeError(
+                    f"Identifier '{base_expr.name}' is frozen and cannot be reassigned",
+                    location=statement.location,
+                    rewrite_rule="ASSIGN",
+                )
+
             base_val = self._evaluate_expression(base_expr, env)
             if base_val.type != TYPE_TNS:
                 raise ASMRuntimeError(
@@ -1672,8 +1760,7 @@ class Interpreter:
             assert isinstance(base_val.value, Tensor)
             indices = [self._expect_int(self._evaluate_expression(node, env), "ASSIGN", statement.location) for node in index_nodes]
             new_value = self._evaluate_expression(statement.value, env)
-            updated = self._set_tensor_value(base_val.value, indices, new_value, statement.location)
-            env.set(base_expr.name, Value(TYPE_TNS, updated))
+            self._mutate_tensor_value(base_val.value, indices, new_value, statement.location)
             return
         if isinstance(statement, ExpressionStatement):
             self._evaluate_expression(statement.expression, env)
@@ -1820,7 +1907,7 @@ class Interpreter:
         return size
 
     def _tensor_truthy(self, tensor: Tensor) -> bool:
-        for item in tensor.data:
+        for item in tensor.data.flat:
             if item.type == TYPE_INT and item.value != 0:
                 return True
             if item.type == TYPE_STR and item.value != "":
@@ -1841,7 +1928,7 @@ class Interpreter:
     def _tensor_equal(self, left: Tensor, right: Tensor) -> bool:
         if left.shape != right.shape:
             return False
-        return all(self._values_equal(a, b) for a, b in zip(left.data, right.data))
+        return all(self._values_equal(a, b) for a, b in zip(left.data.flat, right.data.flat))
 
     def _validate_tensor_shape(self, shape: List[int], rule: str, location: SourceLocation) -> None:
         if not shape:
@@ -1877,16 +1964,24 @@ class Interpreter:
                 return Value(TYPE_TNS, val.value)
             return Value(val.type, val.value)
 
-        return Tensor(shape=list(shape), data=[_clone(fill_value) for _ in range(total)])
+        data = np.array([_clone(fill_value) for _ in range(total)], dtype=object)
+        return Tensor(shape=list(shape), data=data)
 
     def _set_tensor_value(self, tensor: Tensor, indices: List[int], value: Value, location: SourceLocation) -> Tensor:
         offset = self._tensor_flat_index(tensor, indices, "ASSIGN", location)
         current = tensor.data[offset]
         if current.type != value.type:
             raise ASMRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
-        new_data = list(tensor.data)
+        new_data = tensor.data.copy()
         new_data[offset] = value
         return Tensor(shape=list(tensor.shape), data=new_data)
+
+    def _mutate_tensor_value(self, tensor: Tensor, indices: List[int], value: Value, location: SourceLocation) -> None:
+        offset = self._tensor_flat_index(tensor, indices, "ASSIGN", location)
+        current = tensor.data[offset]
+        if current.type != value.type:
+            raise ASMRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
+        tensor.data[offset] = value
 
     def _build_tensor_from_literal(self, literal: TensorLiteral, env: Environment) -> Tensor:
         items = literal.items
@@ -1901,7 +1996,7 @@ class Interpreter:
                     subshape = nested.shape
                 elif subshape != nested.shape:
                     raise ASMRuntimeError("Inconsistent tensor shape", location=item.location, rewrite_rule="TNS")
-                flat.extend(nested.data)
+                flat.extend(list(nested.data.flat))
             else:
                 val = self._evaluate_expression(item, env)
                 if subshape is None:
@@ -1914,7 +2009,7 @@ class Interpreter:
         expected = self._tensor_total_size(shape)
         if len(flat) != expected:
             raise ASMRuntimeError("Tensor literal size mismatch", location=literal.location, rewrite_rule="TNS")
-        return Tensor(shape=shape, data=flat)
+        return Tensor(shape=shape, data=np.array(flat, dtype=object))
 
     def _gather_index_chain(self, expr: Expression) -> Tuple[Expression, List[Expression]]:
         indices: List[Expression] = []

@@ -16,8 +16,8 @@ replay.
 The language is a familiar statement-based, imperative language. Programs
 consist of variable declarations via assignment, expressions, and control-flow
 constructs such as 'IF', 'ELSIF', 'ELSE', 'WHILE', and 'FOR'. ASM-Lang now has
-three runtime data types: binary integers (INT), strings (STR), and immutable
-non-scalar tensors (TNS). Identifiers, function parameters, and return values
+three runtime data types: binary integers (INT), strings (STR), and non-scalar
+tensors (TNS). Identifiers, function parameters, and return values
 are statically typed; the type of every symbol must be declared when it is
 first introduced. Computation proceeds by evaluating expressions and executing
 statements in sequence, with explicit constructs for branching and looping.
@@ -146,31 +146,37 @@ rectangular shape (all sublists at a given depth have the same length) or a
 syntax error is raised. The outermost bracket corresponds to dimension 1.
 Examples (lengths shown in binary):
 
-- `[0,1,10]` has shape `[11]` (one dimension of length three).
-- `[[0,1,10],[0,10,100]]` has shape `[10,11]`.
-- `[[[0,1,10],[1,10,100]]]` has shape `[1,10,11]`.
+- '[0,1,10]' has shape '[11]' (one dimension of length three).
+- '[[0,1,10],[0,10,100]]' has shape '[10,11]'.
+- '[[[0,1,10],[1,10,100]]]' has shape '[1,10,11]'.
 
 Expressions inside a tensor literal may themselves evaluate to INT, STR, or
 TNS. If an element expression evaluates to a tensor value, it occupies a
 single position and does not contribute additional dimensions; only the
 explicit bracket structure determines the shape. A tensor literal that mixes
 sub-brackets of differing lengths is invalid (for example,
-`[[0,0,0],[1,1]]`).
+'[[0,0,0],[1,1]]').
 
-Tensor values are immutable and carry a fixed shape (dimension count and length
+Tensor values carry a fixed shape (dimension count and length
 per dimension). Each location in a tensor is statically typed by the value it
 first receives; attempting to write a different type to that location is a
 runtime error. Tensors are indexed with one-based indices. Negative indices
 address from the end of the corresponding dimension (for example, index -1 is
 the last element of that dimension); index 0 is invalid. Tensors may be
 re-assigned in two ways: binding a new tensor to the variable name, or writing
-through an index such as `tensor[dim1,...,dimN] = expr`. The latter constructs
-a new tensor value and rebinds the variable; the existing tensor value remains
-unchanged.
+through an index such as 'tensor[dim1,...,dimN] = expr'. The latter mutates the
+existing tensor value in place at the indexed location and does not construct a
+new tensor object.
+
+All other tensor operations are non-mutating: tensor literals and tensor-valued
+built-ins produce new tensor values rather than mutating existing ones.
+Because indexed assignment mutates a tensor object, if the same tensor value is
+aliased (bound to multiple identifiers, passed as an argument, or stored inside
+another tensor), all aliases observe the mutation.
 
 Every runtime value has a static type: INT, STR, or TNS. Integers are
 conceptually unbounded mathematical integers. Strings are byte strings of ASCII
-characters. Tensors are immutable, non-scalar aggregates whose elements may be
+characters. Tensors are non-scalar aggregates whose elements may be
 INT, STR, or TNS. When a Boolean interpretation is required, INT treats 0 as
 false and non-zero as true; STR treats the empty string as false and any
 non-empty string as true; TNS is true if any contained element is true by these

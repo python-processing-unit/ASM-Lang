@@ -2,6 +2,7 @@ IMPORT(prng)
 IMPORT(csprng)
 IMPORT(prime)
 IMPORT(decimal)
+IMPORT(waveforms)
 
 FUNC RUN_TESTS():INT{
     PRINT("Running library tests...")
@@ -52,6 +53,65 @@ FUNC RUN_TESTS():INT{
     ASSERT(EQ(decimal.DEC_TO_INT("-4"),-100))
 
     PRINT("Decimal library tests passed.")
+
+    # Waveform library tests
+    INT: freq = 1100100      # 100
+    INT: ms = 1010           # 10
+    INT: amp = 1010          # 10
+    INT: sr = 1111101000     # 1000
+    INT: duty0 = 0
+    INT: duty50 = 110010     # 50
+
+    # Generators
+    TNS: sq = waveforms.SQUARE(freq, ms, amp, sr)
+    ASSERT(EQ(TLEN(sq, 1), ms))
+    ASSERT(EQ(sq[1], amp))
+    ASSERT(EQ(sq[110], NEG(amp)))
+
+    TNS: saw = waveforms.SAWTOOTH(freq, ms, amp, sr)
+    ASSERT(EQ(TLEN(saw, 1), ms))
+    ASSERT(EQ(saw[1], NEG(amp)))
+    ASSERT(EQ(saw[10], NEG(110)))   # -6
+    ASSERT(EQ(saw[1010], 11010))    # 26
+
+    TNS: tri = waveforms.TRIANGLE(freq, ms, amp, sr)
+    ASSERT(EQ(TLEN(tri, 1), ms))
+    ASSERT(EQ(tri[1], NEG(amp)))
+    ASSERT(EQ(tri[110], amp))
+    ASSERT(EQ(tri[1010], NEG(110)))
+
+    TNS: pulse0 = waveforms.PULSE(freq, ms, amp, sr, duty0)
+    ASSERT(EQ(TLEN(pulse0, 1), ms))
+    ASSERT(EQ(pulse0[1], NEG(amp)))
+
+    TNS: pulse50 = waveforms.PULSE(freq, ms, amp, sr, duty50)
+    ASSERT(EQ(TLEN(pulse50, 1), ms))
+    ASSERT(EQ(pulse50[1], amp))
+    ASSERT(EQ(pulse50[110], NEG(amp)))
+
+    TNS: sine0 = waveforms.SINE(freq, ms, 0, sr)
+    ASSERT(EQ(TLEN(sine0, 1), ms))
+    ASSERT(EQ(sine0[1], 0))
+    ASSERT(EQ(sine0[1010], 0))
+
+    # Filters
+    TNS: env = waveforms.ENVELOPE_ADSR(SHAPE(sq), 10, 10, 10, 10)
+    ASSERT(EQ(TLEN(env, 1), ms))
+    ASSERT(EQ(env[1], 10))
+    ASSERT(EQ(env[101], 10))
+    ASSERT(EQ(env[1010], 1))
+
+    TNS: filt_in = [0, 1, 10]
+    TNS: low = waveforms.LOWPASS(filt_in, 1100100, 1100100)
+    ASSERT(EQ(TLEN(low, 1), 11))
+    ASSERT(EQ(low[1], 0))
+    ASSERT(EQ(low[10], 1))
+    ASSERT(EQ(low[11], 10))
+
+    TNS: high = waveforms.HIGHPASS(filt_in, 1100100, 1100100)
+    ASSERT(EQ(TLEN(high, 1), 11))
+    ASSERT(EQ(high[1], 0))
+    ASSERT(EQ(high[11], 0))
 
     # If we reach here all tests passed; print success code and return
     PRINT("All tests passed.")
