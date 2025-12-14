@@ -89,6 +89,8 @@ This caching behavior ensures that importing a module multiple times produces th
 
 `ASSERT(a)` checks that its argument is true in the Boolean sense. If `a` is non-zero, execution proceeds normally; if `a` is `0`, the program crashes with an assertion failure.
 
+`BYTES(n)` converts a non-negative integer into its big-endian byte representation. The result is a one-dimensional `TNS` whose elements are `INT` values in the range `0..11111111` (0-255 decimal), ordered most-significant byte first. The tensor length is `max(1, ceil(bit_length(n)/8))`; `BYTES(0)` returns a single zero byte. Supplying a negative integer is a runtime error.
+
 `MAIN()` returns `1` when the call site belongs to the primary program file (the file passed as the interpreter's first argument, or `<string>` when `-source` is used). It returns `0` when executed from code that came from an `IMPORT` (including nested imports). The result is determined solely by the source file that contains the call expression, not by the caller's call stack.
 
 Program termination is exposed via `EXIT`. `EXIT()` or `EXIT(code)` requests immediate termination of the interpreter. If an integer `code` is supplied, it is used as the interpreter's process exit code; otherwise `0` is used. Execution stops immediately when `EXIT` is executed (no further statements run), and an entry is recorded in the state log to make deterministic replay possible. Using `EXIT` inside a function terminates the entire program (not just the function).
@@ -125,7 +127,7 @@ CONTINUE statement: The language provides a statement form `CONTINUE()` that, wh
 
 Functions are defined using the `FUNC` keyword with explicit parameter and return types. The canonical positional-only form is `FUNC name(T1:arg1, T2:arg2, ..., TN:argN):R{ block }`, where each `Tk` and `R` is `INT`, `STR`, or `TNS`. Parameters may also declare a call-time default value using `Tk:arg=expr`. A parameter without a default is positional; a parameter with a default is keyword-capable. Positional parameters must appear before any parameters with defaults. Defining a function binds `name` to a callable body with the specified typed formal parameters. Function names must not conflict with the names of built-in operators or functions.
 
-A user-defined function is called with the same syntax as a built-in: `name(expr1, expr2, ..., exprN)`. Calls may supply zero or more positional arguments (left-to-right) followed by zero or more keyword arguments of the form `param=expr`. Keyword arguments can only appear after all positional arguments. At the call site, every positional argument is bound to the next positional parameter; keyword arguments must match the name of a parameter that declared a default value. Duplicate keyword names, supplying too many positional arguments, or providing a keyword for an unknown parameter are runtime errors. If a keyword-capable parameter is omitted from the call, its default expression is evaluated at call time in the function's lexical environment after earlier parameters have been bound. The evaluated default must match the parameter's declared type. Built-in functions do not accept keyword arguments; attempting to pass one raises a runtime error. Arguments are evaluated left-to-right. The function body executes in a new environment (activation record) that closes over the defining environment. If a `RETURN(v)` statement is executed, the function terminates immediately and yields `v`; the returned value must match the declared return type. If control reaches the end of the body without `RETURN`, the function returns a default value of the declared return type (0 for `INT`, "" for `STR`). Functions whose return type is
+A user-defined function is called with the same syntax as a built-in: `name(expr1, expr2, ..., exprN)`. Calls may supply zero or more positional arguments (left-to-right) followed by zero or more keyword arguments of the form `param=expr`. Keyword arguments can only appear after all positional arguments. At the call site, every positional argument is bound to the next positional parameter; keyword arguments must match the name of a parameter that declared a default value. Duplicate keyword names, supplying too many positional arguments, or providing a keyword for an unknown parameter are runtime errors. If a keyword-capable parameter is omitted from the call, its default expression is evaluated at call time in the function's lexical environment after earlier parameters have been bound. The evaluated default must match the parameter's declared type. Built-in functions do not accept keyword arguments except that `READFILE` and `WRITEFILE` allow a single optional `coding=` keyword; attempting to pass any other keyword raises a runtime error. Arguments are evaluated left-to-right. The function body executes in a new environment (activation record) that closes over the defining environment. If a `RETURN(v)` statement is executed, the function terminates immediately and yields `v`; the returned value must match the declared return type. If control reaches the end of the body without `RETURN`, the function returns a default value of the declared return type (0 for `INT`, "" for `STR`). Functions whose return type is
 `TNS` must execute an explicit `RETURN` with a tensor value; reaching the end of the body without returning is a runtime error for `TNS`-returning functions.
 
 Built-in operators and functions can be viewed as pre-defined functions provided by the runtime environment. User-defined functions share the same call syntax and are distinguished only by their names and bodies. Because of the shared namespace, a user-defined function is not permitted to use any name already reserved for a built-in. Attempting to violate this will raise an exception.
@@ -240,10 +242,10 @@ Notes:
 - The interpreter may support additional flags and a different ordering of arguments; the rules above define the semantics for `argv[1]`, `-source`, and `-verbose` specifically and are intended to be stable for tooling and replay purposes.
 
 Example invocations (illustrative):
-- File mode: `asmln program.asmln`
-- Source-string mode: `asmln -source "foo = INPUT\nPRINT(foo)" -verbose`
+- File mode: `asm-lang program.asmln`
+- Source-string mode: `asm-lang -source "foo = INPUT\nPRINT(foo)" -verbose`
 
-- REPL / Interactive mode: `asmln` (no program argument)
+- REPL / Interactive mode: `asm-lang` (no program argument)
 
 ## REPL (Interactive Mode)
 
@@ -257,7 +259,7 @@ When the interpreter is invoked without a program path or a `-source` string arg
 - Deterministic logging and tracebacks: all REPL-executed statements are recorded in the same state log format used for file-mode execution. Errors produce tracebacks in the same concise and verbose modes; the `-verbose` flag causes the REPL to attach `env_snapshot` entries in tracebacks when available.
 
 Notes and examples:
-- Start REPL: `asmln`
+- Start REPL: `asm-lang`
 - Exit via meta-command: type `.exit` or press Ctrl-D (EOF)
 - Exit programmatically: `EXIT()` — this immediately terminates the interpreter and returns the specified exit code to the shell, just like in batch execution.
 
@@ -353,8 +355,8 @@ Type notation: union signatures such as `INT|STR` restrict arguments to the list
 - `EXPORT(SYMBOL: symbol, MODULE: module):INT` — Adds the caller's binding for the identifier `symbol` into the namespace of the imported module named by the identifier `module`. The first argument must be an identifier (not a string literal); its current value in the caller's environment is copied into the imported module's namespace and becomes available as the qualified name `module.symbol` in the caller's environment. The second argument must be an identifier naming a previously-imported module; if the module has not been imported yet, the interpreter raises a runtime error (rewrite: EXPORT). `EXPORT` returns `INT` 0 on success.
 
 ### File operations:
-- `READFILE(STR: path):STR` — Reads the file located at `path` and returns its contents as a `STR`. The argument `path` must be a `STR`. If the file cannot be opened or read, the interpreter raises a runtime error (rewrite: READFILE).
-- `WRITEFILE(STR: blob, STR: path):INT` — Writes the string `blob` to the file given by `path`. Both arguments must be `STR`. On success the call returns `INT` 1; on failure (for example, permission or I/O errors) it returns `INT` 0. The call does not raise on write failure.
+- `READFILE(STR: path, STR: coding=\"UTF-8\"):STR` — Reads the file at `path` and returns its contents as a `STR`. Supported `coding` values (case-insensitive) are `UTF-8`, `UTF-8 BOM`, `UTF-16 LE`, `UTF-16 BE`, `ANSI` (Windows-1252 on Windows, Latin-1 elsewhere), `binary` (alias `bin`), and `hexadecimal` (alias `hex`). Text codings decode with replacement on invalid bytes; `UTF-8` tolerates and strips a BOM if present. `binary` returns an 8-bit-per-byte bitstring; `hexadecimal` returns a lowercase hexadecimal string. If the file cannot be opened or read, the interpreter raises a runtime error (rewrite: `READFILE`).
+- `WRITEFILE(STR: blob, STR: path, STR: coding=\"UTF-8\"):INT` — Writes `blob` to `path` using the same `coding` options as `READFILE`. Text codings write in the specified encoding (`UTF-8 BOM` emits a BOM; `ANSI` maps to Windows-1252 on Windows, Latin-1 elsewhere). `binary` expects a bitstring of 0/1 characters whose length is a multiple of 8; `hexadecimal` expects valid hexadecimal. On I/O failure the call returns `INT` 0; invalid coding or malformed binary/hex data raises a runtime error (rewrite: `WRITEFILE`).
 - `EXISTFILE(STR: path):INT` — Returns `INT` 1 when a filesystem object exists at `path`, otherwise returns `INT` 0. The argument must be a `STR`.
 
 ### Symbol Freezing:
@@ -388,4 +390,4 @@ Type notation: union signatures such as `INT|STR` restrict arguments to the list
 ### Notes
 - Built-ins are statically typed. Boolean contexts treat `INT` 0 as false and non-zero as true; `STR` is false when empty and true when non-empty unless a rule explicitly converts via `INT`. A `TNS` is true if any element is true by those `INT`/`STR` rules.
 - Argument evaluation order: left-to-right.
-- User-defined functions use the same call syntax as built-ins; keyword arguments are permitted only after positional arguments and only for parameters that declare defaults. Built-ins reject keyword arguments. When a keyword parameter is omitted, its default expression is evaluated at call time in the function's defining environment.
+- User-defined functions use the same call syntax as built-ins; keyword arguments are permitted only after positional arguments and only for parameters that declare defaults. Built-ins reject keyword arguments except that `READFILE` and `WRITEFILE` accept an optional `coding=` keyword. When a keyword parameter is omitted, its default expression is evaluated at call time in the function's defining environment.

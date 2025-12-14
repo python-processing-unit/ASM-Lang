@@ -369,8 +369,9 @@ class Builtins:
         self._register_custom("ISINT", 1, 1, self._isint)
         self._register_custom("ISSTR", 1, 1, self._isstr)
         self._register_custom("ISTNS", 1, 1, self._istns)
-        self._register_custom("READFILE", 1, 1, self._readfile)
-        self._register_custom("WRITEFILE", 2, 2, self._writefile)
+        self._register_custom("READFILE", 1, 2, self._readfile)
+        self._register_custom("BYTES", 1, 1, self._bytes)
+        self._register_custom("WRITEFILE", 2, 3, self._writefile)
         self._register_custom("EXISTFILE", 1, 1, self._existfile)
         self._register_custom("CL", 1, 1, self._cl)
         self._register_custom("EXIT", 0, 1, self._exit)
@@ -451,6 +452,36 @@ class Builtins:
             raise ASMRuntimeError(f"{rule} expects tensor arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, Tensor)
         return value.value
+
+    def _normalize_coding(self, coding_raw: str, rule: str, location: SourceLocation) -> str:
+        tag = coding_raw.strip().lower().replace("_", "-")
+        compact = tag.replace("-", "").replace(" ", "")
+        mapping = {
+            "utf8": "utf-8",
+            "utf8bom": "utf-8-bom",
+            "utf8sig": "utf-8-bom",
+            "utf": "utf-8",
+            "utf-8": "utf-8",
+            "utf-8bom": "utf-8-bom",
+            "utf-8sig": "utf-8-bom",
+            "utf16le": "utf-16-le",
+            "utf16be": "utf-16-be",
+            "utf-16le": "utf-16-le",
+            "utf-16be": "utf-16-be",
+            "binary": "binary",
+            "bin": "binary",
+            "hex": "hex",
+            "hexadecimal": "hex",
+            "ansi": "ansi",
+        }
+        normalized = mapping.get(compact)
+        if normalized is None:
+            raise ASMRuntimeError(
+                f"Unsupported coding '{coding_raw}'",
+                location=location,
+                rewrite_rule=rule,
+            )
+        return normalized
 
     def _extract_powershell_body(self, cmd: str) -> Optional[str]:
         """Best-effort extraction of the script text passed to -Command.
@@ -1228,24 +1259,31 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         path = self._expect_str(args[0], "READFILE", location)
+        coding_val = args[1] if len(args) > 1 else Value(TYPE_STR, "UTF-8")
+        coding_text = self._expect_str(coding_val, "READFILE", location)
+        coding = self._normalize_coding(coding_text, "READFILE", location)
+
+        if coding in {"binary", "hex"}:
+            try:
+                with open(path, "rb") as handle:
+                    raw = handle.read()
+            except OSError as exc:
+                raise ASMRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
+
+            if coding == "binary":
+                text = "".join(f"{byte:08b}" for byte in raw)
+            else:
+                text = raw.hex()
+            return Value(TYPE_STR, text)
+
+        encoding = "utf-8-sig" if coding in {"utf-8", "utf-8-bom"} else coding
+        if coding == "ansi":
+            encoding = "cp1252" if os.name == "nt" else "latin-1"
         try:
-            with open(path, "rb") as handle:
-                raw = handle.read()
+            with open(path, "r", encoding=encoding, errors="replace") as handle:
+                data = handle.read()
         except OSError as exc:
             raise ASMRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
-
-        # Try to decode common encodings safely: UTF-8 (with or without BOM), UTF-16
-        try:
-            # utf-8-sig will strip a UTF-8 BOM if present
-            data = raw.decode("utf-8-sig")
-        except UnicodeDecodeError:
-            try:
-                # Try UTF-16 (will handle BOMs for LE/BE)
-                data = raw.decode("utf-16")
-            except UnicodeDecodeError:
-                # Fallback: decode with replacement to avoid crashes
-                data = raw.decode("utf-8", errors="replace")
-
         return Value(TYPE_STR, data)
 
     def _writefile(
@@ -1258,12 +1296,63 @@ class Builtins:
     ) -> Value:
         blob = self._expect_str(args[0], "WRITEFILE", location)
         path = self._expect_str(args[1], "WRITEFILE", location)
+        coding_val = args[2] if len(args) > 2 else Value(TYPE_STR, "UTF-8")
+        coding_text = self._expect_str(coding_val, "WRITEFILE", location)
+        coding = self._normalize_coding(coding_text, "WRITEFILE", location)
+
         try:
-            with open(path, "w", encoding="utf-8") as handle:
-                handle.write(blob)
+            if coding == "binary":
+                cleaned = "".join(ch for ch in blob if not ch.isspace())
+                if any(ch not in "01" for ch in cleaned):
+                    raise ASMRuntimeError("WRITEFILE(binary) expects only 0/1 characters", location=location, rewrite_rule="WRITEFILE")
+                if len(cleaned) % 8 != 0:
+                    raise ASMRuntimeError("WRITEFILE(binary) requires bitstrings in multiples of 8 bits", location=location, rewrite_rule="WRITEFILE")
+                out_bytes = bytes(int(cleaned[i : i + 8], 2) for i in range(0, len(cleaned), 8))
+                with open(path, "wb") as handle:
+                    handle.write(out_bytes)
+            elif coding == "hex":
+                try:
+                    out_bytes = bytes.fromhex(blob)
+                except ValueError as exc:
+                    raise ASMRuntimeError(f"WRITEFILE(hex) could not parse hex: {exc}", location=location, rewrite_rule="WRITEFILE")
+                with open(path, "wb") as handle:
+                    handle.write(out_bytes)
+            else:
+                encoding = "utf-8" if coding == "utf-8" else coding
+                if coding == "utf-8-bom":
+                    encoding = "utf-8-sig"
+                if coding == "ansi":
+                    encoding = "cp1252" if os.name == "nt" else "latin-1"
+                with open(path, "w", encoding=encoding) as handle:
+                    handle.write(blob)
         except OSError:
             return Value(TYPE_INT, 0)
         return Value(TYPE_INT, 1)
+
+    def _bytes(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        number = self._expect_int(args[0], "BYTES", location)
+        if number < 0:
+            raise ASMRuntimeError("BYTES expects a non-negative integer", location=location, rewrite_rule="BYTES")
+        if number == 0:
+            data = np.array([Value(TYPE_INT, 0)], dtype=object)
+            return Value(TYPE_TNS, Tensor(shape=[1], data=data))
+
+        octets: List[int] = []
+        temp = number
+        while temp > 0:
+            octets.append(temp & 0xFF)
+            temp >>= 8
+        octets.reverse()
+
+        data = np.array([Value(TYPE_INT, b) for b in octets], dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[len(octets)], data=data))
 
     def _existfile(
         self,
@@ -2153,11 +2242,23 @@ class Interpreter:
                 )
             try:
                 if keyword_args:
-                    raise ASMRuntimeError(
-                        f"{expression.name} does not accept keyword arguments",
-                        location=expression.location,
-                        rewrite_rule=expression.name,
-                    )
+                    if expression.name in {"READFILE", "WRITEFILE"}:
+                        allowed = {"coding"}
+                        unexpected = [k for k in keyword_args if k not in allowed]
+                        if unexpected:
+                            raise ASMRuntimeError(
+                                f"Unexpected keyword arguments: {', '.join(sorted(unexpected))}",
+                                location=expression.location,
+                                rewrite_rule=expression.name,
+                            )
+                        if "coding" in keyword_args:
+                            positional_args.append(keyword_args.pop("coding"))
+                    if keyword_args:
+                        raise ASMRuntimeError(
+                            f"{expression.name} does not accept keyword arguments",
+                            location=expression.location,
+                            rewrite_rule=expression.name,
+                        )
                 arg_nodes = [a.expression for a in expression.args]
                 result = self.builtins.invoke(self, expression.name, positional_args, arg_nodes, env, expression.location)
             except ASMRuntimeError:
