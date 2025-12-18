@@ -944,9 +944,14 @@ class Builtins:
         prev_functions = dict(interpreter.functions)
         try:
             interpreter._execute_block(program.statements, module_env)
-        except Exception:
+        except Exception as exc:
+            # Restore interpreter function table on error and convert
+            # unexpected Python exceptions into ASMRuntimeError so they
+            # are reported using the language's traceback machinery.
             interpreter.functions = prev_functions
-            raise
+            if isinstance(exc, ASMRuntimeError):
+                raise
+            raise ASMRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT")
 
         # Collect functions that were added by executing the module
         new_funcs = {n: f for n, f in interpreter.functions.items() if n not in prev_functions}
@@ -1852,6 +1857,17 @@ class Interpreter:
             if self.logger.entries:
                 error.step_index = self.logger.entries[-1].step_index
             raise
+        except Exception as exc:
+            # Convert unexpected Python-level exceptions into ASMRuntimeError
+            # so callers (REPL/CLI) can format them using ASM-Lang tracebacks.
+            loc = None
+            if self.logger.entries:
+                last = self.logger.entries[-1]
+                loc = last.source_location
+            wrapped = ASMRuntimeError(f"Internal interpreter error: {exc}", location=loc, rewrite_rule="internal")
+            if self.logger.entries:
+                wrapped.step_index = self.logger.entries[-1].step_index
+            raise wrapped
         else:
             self.call_stack.pop()
 

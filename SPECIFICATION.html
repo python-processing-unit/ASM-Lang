@@ -3,12 +3,14 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ASM-Lang SPECIFICATION</title>
+  <title>ASM-Lang Specification</title>
+  <link rel="icon" href="./icon.png" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
     @import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;700&display=swap');
     body{background:#222;color:#99ddff;font-family:Open Sans, sans-serif;margin:0;padding:1rem}
     .container{max-width:1000px;margin:0 auto;text-align:justify;text-justify:inter-word}
+    .container h1{ text-align:center; margin-top:0; }
     pre, code{background:#3c3c3c;color:inherit;font-family:Source Code Pro, monospace;padding:.25rem .5rem}
     img{max-width:100%}
   </style>
@@ -23,6 +25,21 @@
 <p align="center">
   <img alt="ASM-Lang icon" src="./icon.png">
 </p>
+
+## Table of contents
+
+- [1. Overview](#1-overview)
+- [2. Lexical Structure](#2-lexical-structure)
+- [3. Data Model](#3-data-model)
+- [4. Statements and Control Flow](#4-statements-and-control-flow)
+- [5. Functions](#5-functions)
+- [6. Variables and Memory Model](#6-variables-and-memory-model)
+- [7. Execution Model and Semantics](#7-execution-model-and-semantics)
+- [8. Standard Library](#8-standard-library)
+- [9. Tracebacks and Error Reporting](#9-tracebacks-and-error-reporting)
+- [10. Interpreter Use](#10-interpreter-use)
+- [11. REPL (Interactive Mode)](#11-repl-interactive-mode)
+- [12. Operators, Functions, and Statements](#12-operators-functions-and-statements)
 
 This document specifies an imperative programming language with a binary integer data model and an explicit small-step execution semantics. A program is compiled into an initial machine state (a seed configuration) and then executed solely by repeatedly applying a fixed, program-independent state-transition (rewrite) function. All intermediate states are (semi-)human-readable and serializable, and execution can be traced and replayed exactly, including I/O and nondeterministic choices, which are modeled explicitly for deterministic replay.
 

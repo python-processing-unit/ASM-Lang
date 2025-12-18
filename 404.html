@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Page Not Found</title>
+  <link rel="icon" href="./icon.png" />
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Source+Code+Pro:wght@400;700&display=swap');
+    body{background:#222;color:#99ddff;font-family:Open Sans, sans-serif;margin:0;padding:1rem}
+    .container{max-width:1000px;margin:0 auto;text-align:justify;text-justify:inter-word}
+    .container { text-align:center; margin-top:0; }
+    pre, code{background:#3c3c3c;color:inherit;font-family:Source Code Pro, monospace;padding:.25rem .5rem}
+    img{max-width:100%}
+    .notice{text-align:center;margin-top:2rem}
+  </style>
+</head>
+<body>
+  <div class="container" id="content">Rendering page…</div>
+
+  <!-- Markdown source is embedded below. marked.js will render it into #content. -->
+  <script id="md" type="text/markdown">
+# 404
+
+The requested page could not be found.
+
+  </script>
+
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script>
+    document.addEventListener('DOMContentLoaded', function(){
+      const md = document.getElementById('md').textContent;
+      const rendered = marked.parse(md);
+      document.getElementById('content').innerHTML = rendered;
+    });
+  </script>
+</body>
+</html>

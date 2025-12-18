@@ -1,0 +1,10 @@
+# Ignore everything by default
+*
+
+# Keep this ignore file itself and the attached files only
+!.jekyllignore
+!404.html
+!index.html
+!CONTRIBUTING.html
+!SPECIFICATION.html
+!UNLICENSE.html
