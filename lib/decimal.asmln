@@ -44,7 +44,10 @@ FUNC DEC_TO_INT(STR:s):INT{
 
     INT: idx = 0
     # skip any leading spaces before the sign or first digit
-    WHILE( AND( LT(idx, len), EQ(SLICE(s, SUB(len, ADD(idx, 1)), SUB(len, ADD(idx, 1))), " ") ) ){
+    WHILE(AND( ^
+        LT(idx, len), ^
+        EQ(SLICE(s, SUB(len, ADD(idx, 1)), SUB(len, ADD(idx, 1))), " ")) ^
+    ){
         idx = ADD(idx, 1)
     }
     ASSERT( LT(idx, len) )
@@ -63,7 +66,10 @@ FUNC DEC_TO_INT(STR:s):INT{
     }
 
     # skip spaces after the optional sign
-    WHILE( AND( LT(idx, len), EQ(SLICE(s, SUB(len, ADD(idx, 1)), SUB(len, ADD(idx, 1))), " ") ) ){
+    WHILE(AND( ^
+        LT(idx, len), ^
+        EQ(SLICE(s, SUB(len, ADD(idx, 1)), SUB(len, ADD(idx, 1))), " ") ^
+    )){
         idx = ADD(idx, 1)
     }
     ASSERT( LT(idx, len) )

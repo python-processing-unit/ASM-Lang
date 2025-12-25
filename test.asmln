@@ -16,6 +16,8 @@ FUNC RUN_TESTS():INT{
     prng.PRNG_SEED(1010)
     INT: b = prng.PRNG_NEXT()
     ASSERT( EQ(a, b) )
+    DEL(a)
+    DEL(b)
 
     PRINT("PRNG tests passed.")
 
@@ -25,13 +27,15 @@ FUNC RUN_TESTS():INT{
     csprng.CS_PRNG_SEED(101)
     INT: y = csprng.CS_PRNG_NEXT()
     ASSERT( EQ(x, y) )
-
+    DEL(x)
+    DEL(y)
     PRINT("CSPRNG tests passed.")
 
     # Prime library tests
     # Basic primality checks
     ASSERT( EQ( prime.IS_PRIME(10), 1 ) )    # 2 is prime
     ASSERT( EQ( prime.IS_PRIME(11), 1 ) )    # 3 is prime
+    ASSERT( EQ( prime.IS_PRIME(100), 0 ) )   # 4 is not prime
     ASSERT( EQ( prime.IS_PRIME(101), 1 ) )   # 5 is prime
 
     # NEXT_PRIME / PREV_PRIME
@@ -46,6 +50,7 @@ FUNC RUN_TESTS():INT{
     ASSERT( EQ( TLEN(factors, 1), 10 ) )
     ASSERT( EQ( factors[1], 10 ) )
     ASSERT( EQ( factors[10], 101 ) )
+    DEL(factors)
 
     PRINT("Prime library tests passed.")
 
@@ -86,33 +91,46 @@ FUNC RUN_TESTS():INT{
     ASSERT(EQ(saw[1], NEG(amp)))
     ASSERT(EQ(saw[10], NEG(110)))   # -6
     ASSERT(EQ(saw[1010], 11010))    # 26
+    DEL(saw)
 
     TNS: tri = waveforms.TRIANGLE(freq, ms, amp, sr)
     ASSERT(EQ(TLEN(tri, 1), ms))
     ASSERT(EQ(tri[1], NEG(amp)))
     ASSERT(EQ(tri[110], amp))
     ASSERT(EQ(tri[1010], NEG(110)))
+    DEL(tri)
 
     TNS: pulse0 = waveforms.PULSE(freq, ms, amp, sr, duty0)
+    DEL(duty0)
     ASSERT(EQ(TLEN(pulse0, 1), ms))
     ASSERT(EQ(pulse0[1], NEG(amp)))
+    DEL(pulse0)
 
     TNS: pulse50 = waveforms.PULSE(freq, ms, amp, sr, duty50)
+    DEL(duty50)
     ASSERT(EQ(TLEN(pulse50, 1), ms))
     ASSERT(EQ(pulse50[1], amp))
     ASSERT(EQ(pulse50[110], NEG(amp)))
+    DEL(amp)
+    DEL(pulse50)
 
     TNS: sine0 = waveforms.SINE(freq, ms, 0, sr)
+    DEL(sr)
     ASSERT(EQ(TLEN(sine0, 1), ms))
     ASSERT(EQ(sine0[1], 0))
     ASSERT(EQ(sine0[1010], 0))
+    DEL(freq)
+    DEL(sine0)
 
     # Filters
     TNS: env = waveforms.ENVELOPE_ADSR(SHAPE(sq), 10, 10, 10, 10)
+    DEL(sq)
     ASSERT(EQ(TLEN(env, 1), ms))
+    DEL(ms)
     ASSERT(EQ(env[1], 10))
     ASSERT(EQ(env[101], 10))
     ASSERT(EQ(env[1010], 1))
+    DEL(env)
 
     TNS: filt_in = [0, 1, 10]
     TNS: low = waveforms.LOWPASS(filt_in, 1100100, 1100100)
@@ -120,11 +138,14 @@ FUNC RUN_TESTS():INT{
     ASSERT(EQ(low[1], 0))
     ASSERT(EQ(low[10], 1))
     ASSERT(EQ(low[11], 10))
+    DEL(low)
 
     TNS: high = waveforms.HIGHPASS(filt_in, 1100100, 1100100)
+    DEL(filt_in)
     ASSERT(EQ(TLEN(high, 1), 11))
     ASSERT(EQ(high[1], 0))
     ASSERT(EQ(high[11], 0))
+    DEL(high)
 
     PRINT("Waveform library tests passed.")
 
@@ -136,6 +157,7 @@ FUNC RUN_TESTS():INT{
     TNS: svals2 = [1,10,11,100]  # values: 1,2,3,4
     ASSERT( EQ( stats.MEAN(svals2), 10.1 ) )     # mean = 2.5 (10.1)
     ASSERT( EQ( stats.MEDIAN(svals2), 10.1 ) )   # median = 2.5 (10.1)
+    DEL(svals2)
 
     # Quantile: q=0 should return minimum
     ASSERT( EQ( stats.QUANTILE(svals1, 0, 10), 1.0 ) )
@@ -147,21 +169,24 @@ FUNC RUN_TESTS():INT{
     TNS: mode1 = stats.MODE(svals1)
     # All values appear once -> all are modes (length 3 -> binary '11')
     ASSERT( EQ( TLEN(mode1, 1), 11 ) )
+    DEL(mode1)
 
     # Histogram with 2 bins (bins=10 binary) -> first bin count 2, second bin 1
     TNS: hist1 = stats.HISTOGRAM(svals1, 10)
     ASSERT( EQ( TLEN(hist1, 1), 10 ) )
     ASSERT( EQ( hist1[1], 10 ) )
     ASSERT( EQ( hist1[10], 1 ) )
+    DEL(hist1)
 
     TNS: desc1 = stats.DESCRIBE(svals1)
+    DEL(svals1)
     ASSERT( EQ( TLEN(desc1, 1), 101 ) )   # length 5 -> binary 101
     ASSERT( EQ( desc1[1], 11 ) )          # count = 3
     ASSERT( EQ( desc1[10], 10 ) )          # mean = 2
     ASSERT( EQ( desc1[11], 0 ) )           # stdev (as implemented)
     ASSERT( EQ( desc1[100], 1 ) )           # min
     ASSERT( EQ( desc1[101], 11 ) )          # max
-
+    DEL(desc1)
     PRINT("Stats library tests passed.")
 
     # image library
@@ -169,8 +194,11 @@ FUNC RUN_TESTS():INT{
     STR: png_path = JOIN(path.interpreter_dir,"/icon.png")
     STR: jpeg_path = JOIN(path.interpreter_dir,"/icon.jpg")
     TNS: bmp = image.LOAD_BMP(bmp_path)
+    DEL(bmp_path)
     TNS: png = image.LOAD_PNG(png_path)
-    TNS: jpeg = image.LOAD_JPEG(jpeg_path)
+    DEL(png_path)
+    image.LOAD_JPEG(jpeg_path)
+    DEL(jpeg_path)
     ASSERT(EQ(bmp, png))
     ASSERT(EQ(image.FLIP_V(image.FLIP_V(bmp)), bmp))
     ASSERT(EQ(image.FLIP_H(image.FLIP_H(bmp)), bmp))
@@ -184,6 +212,7 @@ FUNC RUN_TESTS():INT{
     ASSERT(EQ(p[10], image.G(bmp, 1, 1)))
     ASSERT(EQ(p[11], image.B(bmp, 1, 1)))
     ASSERT(EQ(p[100], image.A(bmp, 1, 1)))
+    DEL(p)
 
     # Double-invert returns original
     ASSERT(EQ(image.INVERT(image.INVERT(bmp)), bmp))
@@ -192,17 +221,87 @@ FUNC RUN_TESTS():INT{
     TNS: scaled = image.SCALE(bmp, 1, 1, 1)
     ASSERT(EQ(image.WIDTH(scaled), image.WIDTH(bmp)))
     ASSERT(EQ(image.HEIGHT(scaled), image.HEIGHT(bmp)))
+    DEL(scaled)
 
     # Blit into an empty canvas and verify top-left pixel copied
     TNS: canvas = TNS(SHAPE(bmp), 0)
     TNS: canv2 = image.BLIT(bmp, canvas, 1, 1)
+    DEL(canvas)
     ASSERT(EQ(canv2[1,1,1], bmp[1,1,1]))
+    DEL(canv2)
 
     # Grayscale / Blur run and preserve height
     TNS: gray = image.GRAYSCALE(bmp)
     ASSERT(EQ(TLEN(gray, 1), TLEN(bmp, 1)))
+    DEL(gray)
     TNS: blurred = image.BLUR(bmp, 1)
     ASSERT(EQ(TLEN(blurred, 1), TLEN(bmp, 1)))
+    DEL(blurred)
+
+    # Additional image operator coverage
+    STR: out_bmp = JOIN(path.interpreter_dir, "/out_test.bmp")
+    STR: out_png = JOIN(path.interpreter_dir, "/out_test.png")
+    DEL(png)
+    STR: out_jpeg = JOIN(path.interpreter_dir, "/out_test.jpg")
+
+    # SAVE/LOAD roundtrip (BMP/PNG/JPEG)
+    ASSERT(EQ(image.SAVE_BMP(bmp, out_bmp), "OK"))
+    TNS: bmp_rt = image.LOAD_BMP(out_bmp)
+    CL(JOIN('del "', REPLACE(out_bmp,'/','\'), '"'))
+    DEL(out_bmp)
+    ASSERT(EQ(bmp_rt, bmp))
+    DEL(bmp_rt)
+
+    ASSERT(EQ(image.SAVE_PNG(bmp, out_png, 1010), "OK"))
+    TNS: png_rt = image.LOAD_PNG(out_png)
+    CL(JOIN('del "', REPLACE(out_png,'/','\'), '"'))
+    DEL(out_png)
+    ASSERT(EQ(png_rt, bmp))
+    DEL(png_rt)
+    # Use a high JPEG quality (95 -> binary 1011111). JPEG is lossy so
+    # require dimensions match and per-channel values be close.
+    ASSERT(EQ(image.SAVE_JPEG(bmp, out_jpeg, 1011111), "OK"))
+    TNS: jpeg_rt2 = image.LOAD_JPEG(out_jpeg)
+    CL(JOIN('del "', REPLACE(out_jpeg,'/','\'), '"'))
+    DEL(out_jpeg)
+    ASSERT(EQ(image.WIDTH(jpeg_rt2), image.WIDTH(bmp)))
+    ASSERT(EQ(image.HEIGHT(jpeg_rt2), image.HEIGHT(bmp)))
+    ASSERT(EQ(image.CHANNELS(jpeg_rt2), image.CHANNELS(bmp)))
+    INT: dr = ABS(SUB(image.R(jpeg_rt2, 1, 1), image.R(bmp, 1, 1)))
+    INT: dg = ABS(SUB(image.G(jpeg_rt2, 1, 1), image.G(bmp, 1, 1)))
+    INT: db = ABS(SUB(image.B(jpeg_rt2, 1, 1), image.B(bmp, 1, 1)))
+    DEL(jpeg_rt2)
+    # allow small per-channel differences (<=3)
+    ASSERT(LTE(dr, 11))
+    DEL(dr)
+    ASSERT(LTE(dg, 11))
+    DEL(dg)
+    ASSERT(LTE(db, 11))
+    DEL(db)
+
+    # CROP with zeros returns identical image
+    TNS: crop_same = image.CROP(bmp, 0, 0, 0, 0)
+    ASSERT(EQ(crop_same, bmp))
+    DEL(crop_same)
+
+    # SCALE with factor 2 (binary 10) doubles dimensions
+    TNS: scaled2 = image.SCALE(bmp, 10, 10, 1)
+    ASSERT(EQ(image.WIDTH(scaled2), MUL(image.WIDTH(bmp), 10)))
+    ASSERT(EQ(image.HEIGHT(scaled2), MUL(image.HEIGHT(bmp), 10)))
+    DEL(scaled2)
+
+    # ROTATE by 0 degrees is identity
+    TNS: rot0 = image.ROTATE(bmp, 0.0)
+    ASSERT(EQ(rot0, bmp))
+    DEL(rot0)
+
+    # BLIT with mixalpha=0 should copy pixels exactly
+    TNS: canvas2 = TNS(SHAPE(bmp), 0)
+    TNS: blit_out = image.BLIT(bmp, canvas2, 1, 1, 0)
+    DEL(canvas2)
+    ASSERT(EQ(image.PIXEL(blit_out, 1, 1), image.PIXEL(bmp, 1, 1)))
+    DEL(bmp)
+    DEL(blit_out)
 
     PRINT("image library tests passed.")
 

@@ -15,7 +15,7 @@ import os
 import struct
 import sys
 import zlib
-from typing import Any, List, Tuple
+from typing import Any, List, Tuple, Optional
 
 import numpy as np
 
@@ -568,6 +568,93 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_TNS, Tensor(shape=[target_h, target_w, 4], data=flat))
 
 
+def _op_rotate(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+
+    if len(args) < 2:
+        raise ASMRuntimeError("ROTATE expects 2 arguments", location=location, rewrite_rule="ROTATE")
+    src = interpreter._expect_tns(args[0], "ROTATE", location)
+    degrees = interpreter._expect_flt(args[1], "ROTATE", location)
+
+    if len(src.shape) != 3 or src.shape[2] != 4:
+        raise ASMRuntimeError("ROTATE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="ROTATE")
+
+    h, w, _ = src.shape
+    interpreter.builtins._ensure_tensor_ints(src, "ROTATE", location)
+    arr = src.data.reshape(tuple(src.shape))
+
+    # Try Pillow for robust, fast rotation. Fallback to a numpy implementation.
+    try:
+        from PIL import Image
+
+        flat = bytearray()
+        for y in range(h):
+            for x in range(w):
+                r = interpreter._expect_int(arr[y, x, 0], "ROTATE", location)
+                g = interpreter._expect_int(arr[y, x, 1], "ROTATE", location)
+                b = interpreter._expect_int(arr[y, x, 2], "ROTATE", location)
+                a = interpreter._expect_int(arr[y, x, 3], "ROTATE", location)
+                flat.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
+
+        im = Image.frombytes('RGBA', (w, h), bytes(flat))
+        im = im.rotate(float(degrees), resample=Image.BICUBIC, expand=False, fillcolor=(0, 0, 0, 0))
+        out_bytes = im.tobytes('raw', 'RGBA')
+        out_vals = [Value(TYPE_INT, int(b)) for b in out_bytes]
+        data = np.array(out_vals, dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[h, w, 4], data=data))
+    except Exception:
+        # Fall back to numpy bilinear sampling
+        import math
+
+        cx = (w - 1) / 2.0
+        cy = (h - 1) / 2.0
+        rad = math.radians(float(degrees))
+        c = math.cos(rad)
+        s = math.sin(rad)
+
+        out_flat: List[int] = [0] * (h * w * 4)
+
+        def sample_channel(sx: float, sy: float, ch: int) -> float:
+            # Bilinear sample at floating point coordinates, return float
+            x0 = math.floor(sx)
+            y0 = math.floor(sy)
+            wx = sx - x0
+            wy = sy - y0
+            def get(px: int, py: int) -> int:
+                if px < 0 or px >= w or py < 0 or py >= h:
+                    return 0
+                return interpreter._expect_int(arr[py, px, ch], "ROTATE", location)
+            v00 = get(x0, y0)
+            v10 = get(x0 + 1, y0)
+            v01 = get(x0, y0 + 1)
+            v11 = get(x0 + 1, y0 + 1)
+            return (1 - wx) * (1 - wy) * v00 + wx * (1 - wy) * v10 + (1 - wx) * wy * v01 + wx * wy * v11
+
+        for yy in range(h):
+            for xx in range(w):
+                dx = xx - cx
+                dy = yy - cy
+                # inverse rotation to fetch source coordinate
+                sx = cx + (c * dx + s * dy)
+                sy = cy + (-s * dx + c * dy)
+
+                base = (yy * w + xx) * 4
+                if sx < 0 or sx >= w or sy < 0 or sy >= h:
+                    out_flat[base:base+4] = [0, 0, 0, 0]
+                    continue
+                r = int(round(sample_channel(sx, sy, 0)))
+                g = int(round(sample_channel(sx, sy, 1)))
+                b = int(round(sample_channel(sx, sy, 2)))
+                a = int(round(sample_channel(sx, sy, 3)))
+                out_flat[base] = max(0, min(255, r))
+                out_flat[base+1] = max(0, min(255, g))
+                out_flat[base+2] = max(0, min(255, b))
+                out_flat[base+3] = max(0, min(255, a))
+
+        data = np.array([Value(TYPE_INT, int(v)) for v in out_flat], dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[h, w, 4], data=data))
+
+
 def _op_crop(interpreter, args, _arg_nodes, _env, location):
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
@@ -700,6 +787,208 @@ def _op_blur(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_TNS, Tensor(shape=[h, w, 4], data=flat))
 
 
+def _write_bmp_file(path: str, width: int, height: int, pixels: List[int]) -> None:
+    # Write a simple 32-bit BMP (BGRA) uncompressed
+    with open(path, "wb") as handle:
+        row_bytes = width * 4
+        pad = 0
+        # File header (14 bytes)
+        bfType = b'BM'
+        bfOffBits = 14 + 40  # file header + info header
+        bfSize = bfOffBits + (row_bytes * height)
+        handle.write(struct.pack('<2sIHHI', bfType, bfSize, 0, 0, bfOffBits))
+        # BITMAPINFOHEADER (40 bytes)
+        biSize = 40
+        biWidth = width
+        biHeight = height  # bottom-up
+        biPlanes = 1
+        biBitCount = 32
+        biCompression = 0
+        biSizeImage = row_bytes * height
+        biXPelsPerMeter = 0
+        biYPelsPerMeter = 0
+        biClrUsed = 0
+        biClrImportant = 0
+        handle.write(struct.pack('<IIIHHIIIIII', biSize, biWidth, biHeight, biPlanes, biBitCount, biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant))
+        # Pixel data: BMP stores rows bottom-up, each pixel B G R A
+        for y in range(height - 1, -1, -1):
+            row_start = y * width * 4
+            for x in range(width):
+                i = row_start + x * 4
+                r = pixels[i]
+                g = pixels[i + 1]
+                b = pixels[i + 2]
+                a = pixels[i + 3]
+                handle.write(struct.pack('<BBBB', b & 0xFF, g & 0xFF, r & 0xFF, a & 0xFF))
+
+
+def _save_with_gdiplus(path: str, width: int, height: int, pixels: List[int], fmt: str, quality: Optional[int] = None) -> None:
+    gdiplus = _gdiplus_start()
+    bitmap = ctypes.c_void_p()
+    stride = width * 4
+    buf_len = width * height * 4
+    buf = (ctypes.c_ubyte * buf_len)()
+    # pixels are [r,g,b,a]
+    for i in range(width * height):
+        r = int(pixels[i * 4]) & 0xFF
+        g = int(pixels[i * 4 + 1]) & 0xFF
+        b = int(pixels[i * 4 + 2]) & 0xFF
+        a = int(pixels[i * 4 + 3]) & 0xFF
+        idx = i * 4
+        buf[idx] = b
+        buf[idx + 1] = g
+        buf[idx + 2] = r
+        buf[idx + 3] = a
+
+    status = gdiplus.GdipCreateBitmapFromScan0(width, height, stride, _PixelFormat32bppARGB, ctypes.cast(buf, ctypes.c_void_p), ctypes.byref(bitmap))
+    if status != 0:
+        raise RuntimeError(f"GdipCreateBitmapFromScan0 failed ({status})")
+
+    try:
+        class GUID(ctypes.Structure):
+            _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16), ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]
+
+        def _guid_from_str(s: str) -> GUID:
+            hexs = s.strip('{}').split('-')
+            d1 = int(hexs[0], 16)
+            d2 = int(hexs[1], 16)
+            d3 = int(hexs[2], 16)
+            d4_bytes = bytes.fromhex(hexs[3] + hexs[4])
+            arr = (ctypes.c_ubyte * 8)(*d4_bytes)
+            return GUID(d1, d2, d3, arr)
+
+        # Known encoder CLSIDs
+        if fmt.upper() == "PNG":
+            clsid = _guid_from_str('{557CF406-1A04-11D3-9A73-0000F81EF32E}')
+        elif fmt.upper() == "JPEG" or fmt.upper() == "JPG":
+            clsid = _guid_from_str('{557CF401-1A04-11D3-9A73-0000F81EF32E}')
+        else:
+            clsid = _guid_from_str('{557CF400-1A04-11D3-9A73-0000F81EF32E}')
+
+        status = gdiplus.GdipSaveImageToFile(bitmap, ctypes.c_wchar_p(path), ctypes.byref(clsid), None)
+        if status != 0:
+            raise RuntimeError(f"GdipSaveImageToFile failed ({status})")
+    finally:
+        try:
+            gdiplus.GdipDisposeImage(bitmap)
+        except Exception:
+            pass
+
+
+def _op_save_bmp(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_TNS, TYPE_STR, Value
+
+    if len(args) < 2:
+        raise ASMRuntimeError("SAVE_BMP expects 2 arguments", location=location, rewrite_rule="SAVE_BMP")
+    t = interpreter._expect_tns(args[0], "SAVE_BMP", location)
+    path = _expect_str(args[1], "SAVE_BMP", location)
+    if len(t.shape) != 3 or t.shape[2] != 4:
+        raise ASMRuntimeError("SAVE_BMP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_BMP")
+    h, w, _ = t.shape
+    interpreter.builtins._ensure_tensor_ints(t, "SAVE_BMP", location)
+    flat = []
+    arr = t.data.reshape(tuple(t.shape))
+    for y in range(h):
+        for x in range(w):
+            flat.append(interpreter._expect_int(arr[y, x, 0], "SAVE_BMP", location))
+            flat.append(interpreter._expect_int(arr[y, x, 1], "SAVE_BMP", location))
+            flat.append(interpreter._expect_int(arr[y, x, 2], "SAVE_BMP", location))
+            flat.append(interpreter._expect_int(arr[y, x, 3], "SAVE_BMP", location))
+    try:
+        _write_bmp_file(path, w, h, flat)
+    except Exception as exc:
+        raise ASMRuntimeError(f"SAVE_BMP failed: {exc}", location=location, rewrite_rule="SAVE_BMP")
+    return Value(TYPE_STR, "OK")
+
+
+def _op_save_png(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_STR, Value
+
+    if len(args) < 3:
+        raise ASMRuntimeError("SAVE_PNG expects 3 arguments", location=location, rewrite_rule="SAVE_PNG")
+    t = interpreter._expect_tns(args[0], "SAVE_PNG", location)
+    path = _expect_str(args[1], "SAVE_PNG", location)
+    level = interpreter._expect_int(args[2], "SAVE_PNG", location)
+    if len(t.shape) != 3 or t.shape[2] != 4:
+        raise ASMRuntimeError("SAVE_PNG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_PNG")
+    h, w, _ = t.shape
+    interpreter.builtins._ensure_tensor_ints(t, "SAVE_PNG", location)
+    arr = t.data.reshape(tuple(t.shape))
+    flat = bytearray()
+    for y in range(h):
+        for x in range(w):
+            r = interpreter._expect_int(arr[y, x, 0], "SAVE_PNG", location)
+            g = interpreter._expect_int(arr[y, x, 1], "SAVE_PNG", location)
+            b = interpreter._expect_int(arr[y, x, 2], "SAVE_PNG", location)
+            a = interpreter._expect_int(arr[y, x, 3], "SAVE_PNG", location)
+            flat.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
+    # Try Pillow first
+    try:
+        from PIL import Image
+
+        im = Image.frombytes('RGBA', (w, h), bytes(flat))
+        im.save(path, compress_level=max(0, min(9, int(level))))
+        return Value(TYPE_STR, "OK")
+    except Exception:
+        pass
+    # Try GDI+ on Windows
+    if _load_with_gdiplus is not None:
+        try:
+            _save_with_gdiplus(path, w, h, list(flat), "PNG", quality=None)
+            return Value(TYPE_STR, "OK")
+        except Exception as exc:
+            raise ASMRuntimeError(f"SAVE_PNG failed: {exc}", location=location, rewrite_rule="SAVE_PNG")
+    raise ASMRuntimeError("SAVE_PNG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_PNG")
+
+
+def _op_save_jpeg(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_STR, Value
+
+    if len(args) < 3:
+        raise ASMRuntimeError("SAVE_JPEG expects 3 arguments", location=location, rewrite_rule="SAVE_JPEG")
+    t = interpreter._expect_tns(args[0], "SAVE_JPEG", location)
+    path = _expect_str(args[1], "SAVE_JPEG", location)
+    quality = interpreter._expect_int(args[2], "SAVE_JPEG", location)
+    if len(t.shape) != 3 or t.shape[2] != 4:
+        raise ASMRuntimeError("SAVE_JPEG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_JPEG")
+    h, w, _ = t.shape
+    interpreter.builtins._ensure_tensor_ints(t, "SAVE_JPEG", location)
+    arr = t.data.reshape(tuple(t.shape))
+    flat = bytearray()
+    for y in range(h):
+        for x in range(w):
+            r = interpreter._expect_int(arr[y, x, 0], "SAVE_JPEG", location)
+            g = interpreter._expect_int(arr[y, x, 1], "SAVE_JPEG", location)
+            b = interpreter._expect_int(arr[y, x, 2], "SAVE_JPEG", location)
+            a = interpreter._expect_int(arr[y, x, 3], "SAVE_JPEG", location)
+            flat.extend((r & 0xFF, g & 0xFF, b & 0xFF))
+    # Try Pillow
+    try:
+        from PIL import Image
+
+        im = Image.frombytes('RGB', (w, h), bytes(flat))
+        im.save(path, quality=max(1, min(95, int(quality))))
+        return Value(TYPE_STR, "OK")
+    except Exception:
+        pass
+    # Try GDI+
+    if _load_with_gdiplus is not None:
+        try:
+            # _save_with_gdiplus expects RGBA list
+            rgba = []
+            for y in range(h):
+                for x in range(w):
+                    rgba.append(int(arr[y, x, 0]) & 0xFF)
+                    rgba.append(int(arr[y, x, 1]) & 0xFF)
+                    rgba.append(int(arr[y, x, 2]) & 0xFF)
+                    rgba.append(int(arr[y, x, 3]) & 0xFF)
+            _save_with_gdiplus(path, w, h, rgba, "JPEG", quality=int(quality))
+            return Value(TYPE_STR, "OK")
+        except Exception as exc:
+            raise ASMRuntimeError(f"SAVE_JPEG failed: {exc}", location=location, rewrite_rule="SAVE_JPEG")
+    raise ASMRuntimeError("SAVE_JPEG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_JPEG")
+
+
 # ---- Registration ----
 
 def asm_lang_register(ext: ExtensionAPI) -> None:
@@ -707,8 +996,12 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ext.register_operator("LOAD_PNG", 1, 1, _op_load_png, doc="LOAD_PNG(path) -> TNS[height][width][r,g,b,a]")
     ext.register_operator("LOAD_JPEG", 1, 1, _op_load_jpeg, doc="LOAD_JPEG(path) -> TNS[height][width][r,g,b,a]")
     ext.register_operator("LOAD_BMP", 1, 1, _op_load_bmp, doc="LOAD_BMP(path) -> TNS[height][width][r,g,b,a]")
+    ext.register_operator("SAVE_BMP", 2, 2, _op_save_bmp, doc="SAVE_BMP(TNS:img, STR:path) -> STR:OK")
+    ext.register_operator("SAVE_PNG", 3, 3, _op_save_png, doc="SAVE_PNG(TNS:img, STR:path, INT:compression_level) -> STR:OK")
+    ext.register_operator("SAVE_JPEG", 3, 3, _op_save_jpeg, doc="SAVE_JPEG(TNS:img, STR:path, INT:quality) -> STR:OK")
     ext.register_operator("BLIT", 4, 5, _op_blit, doc="BLIT(TNS:src, TNS:dest, INT:x, INT:y, INT:mixalpha=1) -> TNS")
     ext.register_operator("SCALE", 3, 4, _op_scale, doc="SCALE(TNS:src, INT:scale_x, INT:scale_y, INT:antialiasing=1) -> TNS")
+    ext.register_operator("ROTATE", 2, 2, _op_rotate, doc="ROTATE(TNS:img, FLT:degrees) -> TNS")
     ext.register_operator("CROP", 5, 5, _op_crop, doc="CROP(TNS:img, INT:top, INT:right, INT:bottom, INT:left) -> TNS")
     ext.register_operator("GRAYSCALE", 1, 1, _op_grayscale, doc="GRAYSCALE(TNS:img) -> TNS (rgb channels set to luminance, alpha preserved)")
     ext.register_operator("BLUR", 2, 2, _op_blur, doc="BLUR(TNS:img, INT:radius) -> TNS (gaussian blur, radius in pixels)")

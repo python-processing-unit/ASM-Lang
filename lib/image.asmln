@@ -5,6 +5,9 @@
 # LOAD_PNG(STR: path):TNS[height,width,[r,g,b,a]]
 # LOAD_JPEG(STR: path):TNS[height,width,[r,g,b,a]]
 # LOAD_BMP(STR: path):TNS[height,width,[r,g,b,a]]
+# SAVE_PNG(TNS: img, STR: path, INT: compression_level)
+# SAVE_JPEG(TNS: img, STR: path, INT: compression_level)
+# SAVE_BMP(TNS: img, STR: path)
 # WIDTH(TNS: img):INT
 # HEIGHT(TNS: img):INT
 # CHANNELS(TNS: img):INT
@@ -18,6 +21,7 @@
 # INVERT(TNS: img):TNS
 # SCALE(TNS: src, INT: scale_x, INT: scale_y, INT: antialiasing = 1):TNS
 # CROP(TNS: img, INT: tl, INT: tr, INT: bl, INT: br):TNS
+# ROTATE(TNS: img, FLT: degrees):TNS
 # BLIT(TNS: src, TNS: dest, INT: x, INT: y, INT: mixalpha = 1):TNS
 # GRAYSCALE(TNS: img):TNS  # three-channel grayscale (rgb=luminance, alpha preserved)
 # BLUR(TNS: img, INT: radius):TNS  # gaussian blur with integer radius

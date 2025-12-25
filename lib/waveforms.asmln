@@ -189,7 +189,13 @@ FUNC PULSE(INT: freq, INT: ms, INT: amp, INT: sr, INT: duty):TNS{
 
 # Filters
 
-FUNC ENVELOPE_ADSR(TNS: shape, INT: attack, INT: decay, INT: sustain, INT: release):TNS{
+FUNC ENVELOPE_ADSR( ^
+    TNS: shape, ^
+    INT: attack, ^
+    INT: decay, ^
+    INT: sustain, ^
+    INT: release ^
+    ):TNS{
     ASSERT(GTE(attack, 0))
     ASSERT(GTE(decay, 0))
     ASSERT(GTE(sustain, 0))
@@ -265,7 +271,7 @@ FUNC LOWPASS(TNS: inp, INT: cutoff, INT: sr):TNS{
     TNS: shape = SHAPE(inp)
     INT: slen = TLEN(shape, 1)
     INT: frames = 0
-    IF(EQ(slen, 1)){ frames = shape[1] }ELSE{ frames = shape[10] } # shape[10] -> shape[2]
+    IF(EQ(slen, 1)){frames = shape[1] }ELSE{ frames = shape[10]}
     TNS: out = TNS(shape, 0)
     INT: period = CDIV(sr, cutoff)
     IF(LTE(period, 0)){ RETURN(out) }
@@ -306,7 +312,7 @@ FUNC HIGHPASS(TNS: inp, INT: cutoff, INT: sr):TNS{
     TNS: out = TNS(shape, 0)
     INT: slen = TLEN(shape, 1)
     INT: frames = 0
-    IF(EQ(slen, 1)){ frames = shape[1] }ELSE{ frames = shape[10] } # shape[10] -> shape[2]
+    IF(EQ(slen, 1)){frames = shape[1]} ELSE {frames = shape[10]}
     INT: idx = 0
     WHILE(LT(idx, frames)){
         INT: i1 = ADD(idx, 1)
