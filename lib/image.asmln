@@ -25,6 +25,7 @@
 # BLIT(TNS: src, TNS: dest, INT: x, INT: y, INT: mixalpha = 1):TNS
 # GRAYSCALE(TNS: img):TNS  # three-channel grayscale (rgb=luminance, alpha preserved)
 # BLUR(TNS: img, INT: radius):TNS  # gaussian blur with integer radius
+# SHOW(TNS: img, STR: window):INT  # saves to temp file and opens with default viewer (Windows only)
 #
 # The returned tensor layout is [row][column][channel] with 1-based indexing
 # in user code. Channels are ordered r,g,b,a and values are 0..255.
@@ -95,4 +96,14 @@ FUNC INVERT(TNS: img):TNS{
     DEL(b)
     DEL(a)
     POP(out)
+}
+ 
+FUNC SHOW(TNS: img, STR: window):INT{
+    # Save the image to the provided path and open it with the system default
+    # viewer on Windows. `window` is treated as the target file path.
+    SAVE_PNG(img, window, 0)
+    # ShellExecuteW(hwnd, operation, file, params, dir, showcmd)
+    # Use NULL hwnd (0), operation "open", empty params and dir, showcmd=1
+    win32.WIN_CALL("shell32", "ShellExecuteW", "PSSSSI", "P", 0, "open", window, "", "", 1)
+    RETURN(0)
 }

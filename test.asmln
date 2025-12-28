@@ -7,7 +7,7 @@ IMPORT(image)
 IMPORT(waveforms)
 IMPORT(stats)
 
-FUNC RUN_TESTS():INT{
+FUNC STDLIB_TESTS():INT{
     PRINT("Running library tests...")
 
     # PRNG reproducibility (LCG)
@@ -247,14 +247,22 @@ FUNC RUN_TESTS():INT{
     # SAVE/LOAD roundtrip (BMP/PNG/JPEG)
     ASSERT(EQ(image.SAVE_BMP(bmp, out_bmp), "OK"))
     TNS: bmp_rt = image.LOAD_BMP(out_bmp)
-    CL(JOIN('del "', REPLACE(out_bmp,'/','\'), '"'))
+    IF(EQ(OS(),"win")){
+        CL(JOIN('del "', REPLACE(out_bmp,'/','\'), '"'))
+    } ELSE {
+        CL(JOIN('rm "', out_bmp, '"'))
+    }
     DEL(out_bmp)
     ASSERT(EQ(bmp_rt, bmp))
     DEL(bmp_rt)
 
     ASSERT(EQ(image.SAVE_PNG(bmp, out_png, 1010), "OK"))
     TNS: png_rt = image.LOAD_PNG(out_png)
-    CL(JOIN('del "', REPLACE(out_png,'/','\'), '"'))
+    IF(EQ(OS(),"win")){
+        CL(JOIN('del "', REPLACE(out_png,'/','\'), '"'))
+    } ELSE {
+        CL(JOIN('rm "', out_png, '"'))
+    }
     DEL(out_png)
     ASSERT(EQ(png_rt, bmp))
     DEL(png_rt)
@@ -262,7 +270,11 @@ FUNC RUN_TESTS():INT{
     # require dimensions match and per-channel values be close.
     ASSERT(EQ(image.SAVE_JPEG(bmp, out_jpeg, 1011111), "OK"))
     TNS: jpeg_rt2 = image.LOAD_JPEG(out_jpeg)
-    CL(JOIN('del "', REPLACE(out_jpeg,'/','\'), '"'))
+    IF(EQ(OS(),"win")){
+        CL(JOIN('del "', REPLACE(out_jpeg,'/','\'), '"'))
+    } ELSE {
+        CL(JOIN('rm "', out_jpeg, '"'))
+    }
     DEL(out_jpeg)
     ASSERT(EQ(image.WIDTH(jpeg_rt2), image.WIDTH(bmp)))
     ASSERT(EQ(image.HEIGHT(jpeg_rt2), image.HEIGHT(bmp)))
@@ -304,9 +316,11 @@ FUNC RUN_TESTS():INT{
     DEL(blit_out)
 
     PRINT("image library tests passed.")
-
-    # Extension tests (requires interpreter to be started with these extensions loaded)
     PRINT()
+    RETURN(0)
+}
+
+FUNC STDEXT_TESTS():INT{
 
     PRINT("Running extension tests...")
 
@@ -332,9 +346,13 @@ FUNC RUN_TESTS():INT{
     ASSERT(LTE(volpct, 1100100))  # dec 100
     PRINT("wasapi extension tests passed.")
 
-    # If we reach here all tests passed; print success code and return
     PRINT()
-    
+    RETURN(0)
+}
+
+FUNC RUN_TESTS():INT{
+    STDLIB_TESTS()
+    STDEXT_TESTS()
     PRINT("All tests passed.")
     RETURN(0)
 }

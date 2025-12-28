@@ -974,14 +974,16 @@ def _op_save_jpeg(interpreter, args, _arg_nodes, _env, location):
     # Try GDI+
     if _load_with_gdiplus is not None:
         try:
-            # _save_with_gdiplus expects RGBA list
+            # _save_with_gdiplus expects an RGBA list of plain ints. Use the
+            # interpreter helper to unwrap `Value` objects to ints rather than
+            # calling `int()` on them directly.
             rgba = []
             for y in range(h):
                 for x in range(w):
-                    rgba.append(int(arr[y, x, 0]) & 0xFF)
-                    rgba.append(int(arr[y, x, 1]) & 0xFF)
-                    rgba.append(int(arr[y, x, 2]) & 0xFF)
-                    rgba.append(int(arr[y, x, 3]) & 0xFF)
+                    rgba.append(interpreter._expect_int(arr[y, x, 0], "SAVE_JPEG", location) & 0xFF)
+                    rgba.append(interpreter._expect_int(arr[y, x, 1], "SAVE_JPEG", location) & 0xFF)
+                    rgba.append(interpreter._expect_int(arr[y, x, 2], "SAVE_JPEG", location) & 0xFF)
+                    rgba.append(interpreter._expect_int(arr[y, x, 3], "SAVE_JPEG", location) & 0xFF)
             _save_with_gdiplus(path, w, h, rgba, "JPEG", quality=int(quality))
             return Value(TYPE_STR, "OK")
         except Exception as exc:

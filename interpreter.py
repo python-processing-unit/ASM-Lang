@@ -386,6 +386,7 @@ class Builtins:
         self._register_custom("ISFLT", 1, 1, self._isflt)
         self._register_custom("ISSTR", 1, 1, self._isstr)
         self._register_custom("ISTNS", 1, 1, self._istns)
+        self._register_custom("TYPE", 1, 1, self._type)
         self._register_custom("ROUND", 1, 3, self._round)
         self._register_custom("READFILE", 1, 2, self._readfile)
         self._register_custom("BYTES", 1, 1, self._bytes)
@@ -1747,6 +1748,21 @@ class Builtins:
             err.location = location
             raise
         return Value(TYPE_INT, 1 if val.type == TYPE_TNS else 0)
+
+    def _type(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        arg_nodes: List[Expression],
+        env: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # TYPE(ANY: obj):STR -> return the runtime type name of the value as STR
+        if len(args) != 1:
+            raise ASMRuntimeError("TYPE expects one argument", location=location, rewrite_rule="TYPE")
+        val = args[0]
+        # Return the type string as STR; preserve extension type names if present
+        return Value(TYPE_STR, val.type)
 
     def _frozen(
         self,

@@ -72,17 +72,17 @@ Identifier character set (clarification): The (non-empty) sequence of characters
 
 - The first character MUST NOT be `0` or `1`. Any other non-ASCII character is disallowed, but otherwise the lexer permits a broad set of ASCII punctuation and symbol characters in addition to letters and digits. In particular, the following characters are valid as the first character of an identifier:
 
-  - Lowercase letters `a`–`z`
-  - Uppercase letters `A`–`Z`
-  - Decimal digits `2`–`9`
+  - Lowercase letters `a`-`z`
+  - Uppercase letters `A`-`Z`
+  - Decimal digits `2`-`9`
   - The punctuation and symbol characters
     `; / ! @ $ % & ~ _ + | < > ?`
 
 - Subsequent characters in an identifier may be any of the following:
 
-  - Lowercase letters `a`–`z`
-  - Uppercase letters `A`–`Z`
-  - Decimal digits `0`–`9`
+  - Lowercase letters `a`-`z`
+  - Uppercase letters `A`-`Z`
+  - Decimal digits `0`-`9`
   - The punctuation and symbol characters
     `; / ! @ $ % & ~ _ + | < > ?`
 
@@ -113,7 +113,7 @@ Tensor literal: a non-empty bracketed collection of expressions. Each pair of ma
 - `[[0,1,10],[0,10,100]]` has shape `[10,11]`.
 - `[[[0,1,10],[1,10,100]]]` has shape `[1,10,11]`.
 
-Expressions inside a tensor literal may themselves evaluate to `INT`, `STR`, or `TNS`. If an element expression evaluates to a tensor value, it occupies a single position and does not contribute additional dimensions; only the explicit bracket structure determines the shape. A tensor literal that mixes sub-brackets of differing lengths is invalid (for example, `[[0,0,0],[1,1]]`).
+Expressions inside a tensor literal may themselves evaluate to `INT`, `FLT`, `STR`, or `TNS`. If an element expression evaluates to a tensor value, it occupies a single position and does not contribute additional dimensions; only the explicit bracket structure determines the shape. A tensor literal that mixes sub-brackets of differing lengths is invalid (for example, `[[0,0,0],[1,1]]`).
 
 Tensor values carry a fixed shape (dimension count and length per dimension). Each location in a tensor is statically typed by the value it first receives; attempting to write a different type to that location is a runtime error. Tensors are indexed with one-based indices. Negative indices address from the end of the corresponding dimension (for example, index -1 is the last element of that dimension); index 0 is invalid. Tensors may be re-assigned in two ways: binding a new tensor to the variable name, or writing through an index such as `tensor[dim1,...,dimN] = expr`. The latter mutates the existing tensor value in place at the indexed location and does not construct a new tensor object.
 
@@ -344,6 +344,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `ISINT(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `INT`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
 - `ISSTR(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `STR`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
 - `ISTNS(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `TNS`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
+- `TYPE(ANY: obj):STR` ; returns the runtime type name of `obj` as a `STR` — one of `INT`, `FLT`, `STR`, or `TNS` (extension-defined type names are returned unchanged when extensions are enabled).
 - `SLEN(STR: s):INT` returns the length of the supplied `STR` in characters as an `INT`. The argument must be a `STR`; passing an `INT` raises a runtime error.
 - `ILEN(INT: n):INT` returns the length in binary digits of the absolute value of the supplied `INT`. `ILEN(0)` returns 1. The argument must be an `INT`; passing a `STR` raises a runtime error.
 
