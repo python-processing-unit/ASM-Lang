@@ -11,7 +11,7 @@ class ASMParseError(ASMError):
     """Raised when parsing fails."""
 
 
-@dataclass
+@dataclass(slots=True)
 class Token:
     type: str
     value: str
@@ -46,6 +46,10 @@ SYMBOLS = {
     ":": "COLON",
 }
 
+# Precompute identifier character sets for fast membership tests
+IDENT_START_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?"))
+IDENT_PART_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?"))
+
 
 class Lexer:
     def __init__(self, text: str, filename: str) -> None:
@@ -54,6 +58,8 @@ class Lexer:
         self.index = 0
         self.line = 1
         self.column = 1
+        # Cache the text length to avoid repeated len() calls in hot paths
+        self._n = len(text)
 
     def tokenize(self) -> List[Token]:
         tokens: List[Token] = []
@@ -62,7 +68,7 @@ class Lexer:
         _is_identifier_start = self._is_identifier_start
         symbols = SYMBOLS
         text = self.text
-        n = len(text)
+        n = self._n
 
         while self.index < n:
             ch: str = text[self.index]
@@ -130,9 +136,8 @@ class Lexer:
 
     def _consume_comment(self) -> None:
         text = self.text
-        n = len(text)
         _advance = self._advance
-        while self.index < n and text[self.index] != "\n":
+        while self.index < self._n and self.text[self.index] != "\n":
             _advance()
 
     def _consume_unsigned_number(self) -> Token:
@@ -163,17 +168,19 @@ class Lexer:
             )
         self._advance()  # consume opening quote
         chars: List[str] = []
+        _peek = self._peek
+        _advance = self._advance
         while not self._eof:
-            ch = self._peek()
+            ch = _peek()
             if ch == opening:
-                self._advance()
+                _advance()
                 return Token("STRING", "".join(chars), line, col)
             if ch == "\n":
                 raise ASMParseError(
                     f"Unterminated string literal at {self.filename}:{line}:{col}"
                 )
             chars.append(ch)
-            self._advance()
+            _advance()
         raise ASMParseError(
             f"Unterminated string literal at {self.filename}:{line}:{col}"
         )
@@ -181,8 +188,10 @@ class Lexer:
     def _consume_signed_number(self) -> Token:
         line, col = self.line, self.column
         self._advance()
-        while not self._eof and self._peek() in " \t\r":
-            self._advance()
+        _peek = self._peek
+        _advance = self._advance
+        while not self._eof and _peek() in " \t\r":
+            _advance()
         if self._eof or self._peek() not in "01":
             raise ASMParseError(f"Expected binary digits after '-' at {self.filename}:{line}:{col}")
         whole = self._consume_binary_digits()
@@ -199,17 +208,16 @@ class Lexer:
 
     def _consume_binary_digits(self) -> str:
         digits: List[str] = []
-        text = self.text
-        n = len(text)
         _advance = self._advance
-        while self.index < n:
+        text = self.text
+        while self.index < self._n:
             ch = text[self.index]
-            if ch in "01":
+            if ch == '^':
+                self._consume_line_continuation()
+                continue
+            if ch == '0' or ch == '1':
                 digits.append(ch)
                 _advance()
-                continue
-            if ch == "^":
-                self._consume_line_continuation()
                 continue
             break
         return "".join(digits)
@@ -222,16 +230,16 @@ class Lexer:
             )
         chars: List[str] = []
         text = self.text
-        n = len(text)
         _advance = self._advance
-        while self.index < n:
+        is_part = self._is_identifier_part
+        while self.index < self._n:
             ch = text[self.index]
-            if self._is_identifier_part(ch):
+            if ch == '^':
+                self._consume_line_continuation()
+                continue
+            if is_part(ch):
                 chars.append(ch)
                 _advance()
-                continue
-            if ch == "^":
-                self._consume_line_continuation()
                 continue
             break
         value = "".join(chars)
@@ -239,14 +247,14 @@ class Lexer:
         return Token(token_type, value, line, col)
 
     def _is_identifier_start(self, ch: str) -> bool:
-        return (ch in "abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?")
+        return ch in IDENT_START_CHARS
 
     def _is_identifier_part(self, ch: str) -> bool:
-        return (ch in "abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?")
+        return ch in IDENT_PART_CHARS
         # "." is not actually a valid character in namespace symbols, but is allowed since it is used to separate module names from namespace symbols.
 
     def _consume_line_continuation(self) -> None:
-        if self.index + 1 >= len(self.text):
+        if self.index + 1 >= self._n:
             raise ASMParseError(
                 f"Invalid line continuation '^' at {self.filename}:{self.line}:{self.column}"
             )
@@ -267,7 +275,7 @@ class Lexer:
 
     @property
     def _eof(self) -> bool:
-        return self.index >= len(self.text)
+        return self.index >= self._n
 
     def _peek(self) -> str:
         return self.text[self.index]

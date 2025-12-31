@@ -633,6 +633,83 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_TNS, Tensor(shape=[target_w, target_h, 4], data=flat))
 
 
+def _op_resize(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+
+    # args: src, new_width, new_height, antialiasing=1 (antialiasing optional)
+    if len(args) < 3:
+        raise ASMRuntimeError("RESIZE expects at least 3 arguments", location=location, rewrite_rule="RESIZE")
+    src = interpreter._expect_tns(args[0], "RESIZE", location)
+    target_w = interpreter._expect_int(args[1], "RESIZE", location)
+    target_h = interpreter._expect_int(args[2], "RESIZE", location)
+    antialiasing = 1
+    if len(args) >= 4:
+        antialiasing = interpreter._expect_int(args[3], "RESIZE", location)
+
+    if len(src.shape) != 3 or src.shape[2] != 4:
+        raise ASMRuntimeError("RESIZE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="RESIZE")
+
+    src_w, src_h, _ = src.shape
+    if target_w <= 0 or target_h <= 0:
+        raise ASMRuntimeError("RESIZE target dimensions must be positive", location=location, rewrite_rule="RESIZE")
+    # Fast path: identical size -> return a copy
+    if src_h == target_h and src_w == target_w:
+        flat = np.array(src.data.flat, dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=list(src.shape), data=flat))
+
+    interpreter.builtins._ensure_tensor_ints(src, "RESIZE", location)
+
+    src_arr = src.data.reshape((src_w, src_h, 4))
+    out = np.empty((target_w, target_h, 4), dtype=object)
+    _expect_int = interpreter._expect_int
+    _Val = Value
+    _TINT = TYPE_INT
+
+    if antialiasing:
+        # Bilinear interpolation (absolute target dimensions)
+        scale_y = src_h / float(target_h)
+        scale_x = src_w / float(target_w)
+        for j in range(target_h):
+            src_y = (j + 0.5) * scale_y - 0.5
+            y0 = int(math.floor(src_y))
+            y1 = y0 + 1
+            wy = src_y - y0
+            wy0 = 1.0 - wy
+            y0_clamped = max(0, min(src_h - 1, y0))
+            y1_clamped = max(0, min(src_h - 1, y1))
+            for i in range(target_w):
+                src_x = (i + 0.5) * scale_x - 0.5
+                x0 = int(math.floor(src_x))
+                x1 = x0 + 1
+                wx = src_x - x0
+                wx0 = 1.0 - wx
+                x0_clamped = max(0, min(src_w - 1, x0))
+                x1_clamped = max(0, min(src_w - 1, x1))
+                # sample four neighbors and blend — src_arr is [x,y,c]
+                for c in range(4):
+                    v00 = _expect_int(src_arr[x0_clamped, y0_clamped, c], "RESIZE", location)
+                    v10 = _expect_int(src_arr[x1_clamped, y0_clamped, c], "RESIZE", location)
+                    v01 = _expect_int(src_arr[x0_clamped, y1_clamped, c], "RESIZE", location)
+                    v11 = _expect_int(src_arr[x1_clamped, y1_clamped, c], "RESIZE", location)
+                    val = (v00 * (wy0 * wx0) + v10 * (wy0 * wx) + v01 * (wy * wx0) + v11 * (wy * wx))
+                    iv = int(round(val))
+                    iv = 0 if iv < 0 else (255 if iv > 255 else iv)
+                    out[i, j, c] = _Val(_TINT, iv)
+    else:
+        # Nearest-neighbor
+        for j in range(target_h):
+            src_y = int(round((j + 0.5) * (src_h / float(target_h)) - 0.5))
+            sy = max(0, min(src_h - 1, src_y))
+            for i in range(target_w):
+                src_x = int(round((i + 0.5) * (src_w / float(target_w)) - 0.5))
+                sx = max(0, min(src_w - 1, src_x))
+                for c in range(4):
+                    out[i, j, c] = _Val(_TINT, int(_expect_int(src_arr[sx, sy, c], "RESIZE", location)))
+
+    flat = np.array(out.flatten(), dtype=object)
+    return Value(TYPE_TNS, Tensor(shape=[target_w, target_h, 4], data=flat))
+
+
 def _op_rotate(interpreter, args, _arg_nodes, _env, location):
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
@@ -1410,6 +1487,72 @@ def _op_replace_color(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=flat))
 
 
+def _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel: int, rule: str):
+    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+
+    if len(args) < 2:
+        raise ASMRuntimeError(f"{rule} expects at least 2 arguments", location=location, rewrite_rule=rule)
+    img = interpreter._expect_tns(args[0], rule, location)
+    thresh = interpreter._expect_int(args[1], rule, location)
+
+    # Optional color
+    d_r = d_g = d_b = d_a = 0
+    d_has_alpha = True
+    if len(args) >= 3:
+        color_t = interpreter._expect_tns(args[2], rule, location)
+        if len(color_t.shape) != 1 or color_t.shape[0] not in (3, 4):
+            raise ASMRuntimeError(f"{rule}: color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule=rule)
+        carr = color_t.data.reshape(tuple(color_t.shape))
+        d_r = interpreter._expect_int(carr[0], rule, location)
+        d_g = interpreter._expect_int(carr[1], rule, location)
+        d_b = interpreter._expect_int(carr[2], rule, location)
+        if color_t.shape[0] == 4:
+            d_a = interpreter._expect_int(carr[3], rule, location)
+            d_has_alpha = True
+        else:
+            d_has_alpha = False
+
+    if len(img.shape) != 3 or img.shape[2] != 4:
+        raise ASMRuntimeError(f"{rule} expects a 3D image tensor with 4 channels", location=location, rewrite_rule=rule)
+
+    w, h, _ = img.shape
+    interpreter.builtins._ensure_tensor_ints(img, rule, location)
+    arr = img.data.reshape((w, h, 4))
+    new_arr = arr.copy()
+
+    _Val = Value
+    _TINT = TYPE_INT
+
+    for y in range(h):
+        for x in range(w):
+            p_val = interpreter._expect_int(new_arr[x, y, channel], rule, location)
+            if p_val == thresh:
+                new_arr[x, y, 0] = _Val(_TINT, int(_clamp_channel(d_r)))
+                new_arr[x, y, 1] = _Val(_TINT, int(_clamp_channel(d_g)))
+                new_arr[x, y, 2] = _Val(_TINT, int(_clamp_channel(d_b)))
+                if d_has_alpha:
+                    new_arr[x, y, 3] = _Val(_TINT, int(_clamp_channel(d_a)))
+
+    flat = np.array(new_arr.flatten(), dtype=object)
+    return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=flat))
+
+
+def _op_thresh_a(interpreter, args, _arg_nodes, _env, location):
+    return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=3, rule="THRESHHOLD_A")
+
+
+def _op_thresh_r(interpreter, args, _arg_nodes, _env, location):
+    return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=0, rule="THRESHHOLD_R")
+
+
+def _op_thresh_g(interpreter, args, _arg_nodes, _env, location):
+    return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=1, rule="THRESHHOLD_G")
+
+
+def _op_thresh_b(interpreter, args, _arg_nodes, _env, location):
+    return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=2, rule="THRESHHOLD_B")
+
+
 def _op_render_text(interpreter, args, _arg_nodes, _env, location):
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
@@ -1934,6 +2077,155 @@ def _op_invert(interpreter, args, _arg_nodes, _env, location):
     data = np.array(flat_objs, dtype=object)
     return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=data))
 
+
+def _op_edge(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+
+    if len(args) != 1:
+        raise ASMRuntimeError("EDGE expects 1 argument", location=location, rewrite_rule="EDGE")
+    img = interpreter._expect_tns(args[0], "EDGE", location)
+
+    # Expect a 3D image tensor with 4 channels (RGBA)
+    if len(img.shape) != 3 or img.shape[2] != 4:
+        raise ASMRuntimeError("EDGE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="EDGE")
+
+    w, h, _ = img.shape
+    interpreter.builtins._ensure_tensor_ints(img, "EDGE", location)
+    arr = img.data.reshape((w, h, 4))
+
+    # Fast path: build an int numpy array of shape (w,h,4) using fromiter
+    total = w * h * 4
+    flat_iter = (int(v.value) for v in arr.flatten())
+    flat_ints = np.fromiter(flat_iter, dtype=np.int64, count=total)
+    int_arr = flat_ints.reshape((w, h, 4))
+
+    # Compute luminance vectorized: shape (w,h)
+    lum = (0.299 * int_arr[:, :, 0].astype(float)
+           + 0.587 * int_arr[:, :, 1].astype(float)
+           + 0.114 * int_arr[:, :, 2].astype(float))
+
+    # Vectorized separable Gaussian blur using numpy.convolve per line (C implementation)
+    def _gaussian_blur_2d(src: np.ndarray, radius: int) -> np.ndarray:
+        if radius <= 0:
+            return src.copy()
+        sigma = max(0.5, radius / 2.0)
+        ksize = radius * 2 + 1
+        kernel = np.array([math.exp(-((i - radius) ** 2) / (2.0 * sigma * sigma)) for i in range(ksize)], dtype=float)
+        kernel /= kernel.sum()
+
+        # horizontal pass: convolve along x for each y (use numpy.convolve C implementation)
+        tmp = np.empty_like(src, dtype=float)
+        for y in range(src.shape[1]):
+            tmp[:, y] = np.convolve(src[:, y], kernel, mode='same')
+
+        # vertical pass: convolve along y for each x
+        out = np.empty_like(src, dtype=float)
+        for x in range(src.shape[0]):
+            out[x, :] = np.convolve(tmp[x, :], kernel, mode='same')
+
+        return out
+
+    # DoG: small - large blur (radii 1 and 2)
+    small = _gaussian_blur_2d(lum, 1)
+    large = _gaussian_blur_2d(lum, 2)
+    dog = small - large
+
+    mag = np.abs(dog)
+    maxv = float(mag.max()) if mag.size > 0 else 0.0
+    if maxv <= 0.0:
+        scaled = np.zeros_like(mag, dtype=np.int32)
+    else:
+        scaled = np.clip(np.round((mag / maxv) * 255.0), 0, 255).astype(np.int32)
+
+    # Build output 4-channel image efficiently: R=G=B=scaled magnitude, alpha preserved
+    alpha_flat = int_arr[:, :, 3].flatten().astype(np.int32)
+    total_pix = w * h
+    out_flat_ints = np.empty(total_pix * 4, dtype=np.int32)
+    vals = scaled.flatten()
+    out_flat_ints[0::4] = vals
+    out_flat_ints[1::4] = vals
+    out_flat_ints[2::4] = vals
+    out_flat_ints[3::4] = alpha_flat
+
+    # Wrap into Value objects (one list comprehension over ints)
+    _Val = Value
+    _TINT = TYPE_INT
+    flat_objs = [_Val(_TINT, int(v)) for v in out_flat_ints]
+    data = np.array(flat_objs, dtype=object)
+    return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
+
+def _op_cellshade(interpreter, args, _arg_nodes, _env, location):
+    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+
+    if len(args) != 2:
+        raise ASMRuntimeError("CELLSHADE expects 2 arguments", location=location, rewrite_rule="CELLSHADE")
+    img = interpreter._expect_tns(args[0], "CELLSHADE", location)
+    palette = interpreter._expect_tns(args[1], "CELLSHADE", location)
+
+    # Expect a 3D image tensor with 4 channels (RGBA)
+    if len(img.shape) != 3 or img.shape[2] != 4:
+        raise ASMRuntimeError("CELLSHADE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="CELLSHADE")
+
+    w, h, _ = img.shape
+    interpreter.builtins._ensure_tensor_ints(img, "CELLSHADE", location)
+    img_arr = img.data.reshape((w, h, 4))
+
+    # Normalize palette into Nx(3 or 4) integer array
+    if len(palette.shape) == 1 and palette.shape[0] in (3, 4):
+        pal_arr = palette.data.reshape(tuple(palette.shape))
+        pal_list = [interpreter._expect_int(pal_arr[i], "CELLSHADE", location) for i in range(palette.shape[0])]
+        pal_np = np.array([pal_list], dtype=np.int32)
+    elif len(palette.shape) == 2 and palette.shape[1] in (3, 4):
+        pal_view = palette.data.reshape(tuple(palette.shape))
+        pal_np = np.empty((palette.shape[0], palette.shape[1]), dtype=np.int32)
+        for i in range(palette.shape[0]):
+            for j in range(palette.shape[1]):
+                pal_np[i, j] = interpreter._expect_int(pal_view[i, j], "CELLSHADE", location)
+    else:
+        raise ASMRuntimeError("CELLSHADE: colors must be a TNS of shape [N,3] or [N,4] or a single 1-D color", location=location, rewrite_rule="CELLSHADE")
+
+    # Separate RGB and optional alpha
+    if pal_np.shape[1] == 3:
+        pal_rgb = pal_np[:, :3]
+        pal_alpha = None
+    else:
+        pal_rgb = pal_np[:, :3]
+        pal_alpha = pal_np[:, 3]
+
+    # Build integer image array
+    total = w * h * 4
+    flat_iter = (int(v.value) for v in img_arr.flatten())
+    flat_ints = np.fromiter(flat_iter, dtype=np.int64, count=total)
+    int_img = flat_ints.reshape((w, h, 4)).astype(np.int32)
+
+    rgb = int_img[:, :, :3]
+
+    # Compute squared distances to palette colors using broadcasting
+    # resulting shape: (w, h, n)
+    dif = rgb[..., None, :] - pal_rgb[None, None, :, :]
+    d2 = np.sum(dif.astype(np.int64) * dif.astype(np.int64), axis=-1)
+    idx = np.argmin(d2, axis=2)
+
+    # Build output int array
+    out_ints = np.empty((w, h, 4), dtype=np.int32)
+    for i in range(pal_rgb.shape[0]):
+        mask = (idx == i)
+        out_ints[mask, 0] = pal_rgb[i, 0]
+        out_ints[mask, 1] = pal_rgb[i, 1]
+        out_ints[mask, 2] = pal_rgb[i, 2]
+        if pal_alpha is None:
+            # preserve source alpha
+            out_ints[mask, 3] = int_img[mask, 3]
+        else:
+            out_ints[mask, 3] = pal_alpha[i]
+
+    # Convert to Value objects
+    _Val = Value
+    _TINT = TYPE_INT
+    flat_objs = [_Val(_TINT, int(v)) for v in out_ints.flatten()]
+    data = np.array(flat_objs, dtype=object)
+    return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
+
 def asm_lang_register(ext: ExtensionAPI) -> None:
     ext.metadata(name="image", version="0.1.0")
     ext.register_operator("LOAD_PNG", 1, 1, _op_load_png, doc="LOAD_PNG(path):TNS[width][height][r,g,b,a]")
@@ -1950,6 +2242,13 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ext.register_operator("ROTATE", 2, 2, _op_rotate, doc="ROTATE(TNS:img, FLT:degrees):TNS")
     ext.register_operator("GRAYSCALE", 1, 1, _op_grayscale, doc="GRAYSCALE(TNS:img):TNS (rgb channels set to luminance, alpha preserved)")
     ext.register_operator("INVERT", 1, 1, _op_invert, doc="INVERT(TNS:img):TNS (invert RGB channels, preserve alpha)")
+    ext.register_operator("EDGE", 1, 1, _op_edge, doc="EDGE(TNS:img):TNS (difference-of-gaussians edge detector)")
     ext.register_operator("BLUR", 2, 2, _op_blur, doc="BLUR(TNS:img, INT:radius):TNS (gaussian blur, radius in pixels)")
     ext.register_operator("REPLACE_COLOR", 3, 3, _op_replace_color, doc="REPLACE_COLOR(TNS:img, TNS:src_color[3|4], TNS:dst_color[3|4]):TNS - Replace src_color with dst_color; RGB dst preserves alpha if dst has no alpha")
     ext.register_operator("RENDER_TEXT", 2, 6, _op_render_text, doc="RENDER_TEXT(STR:text, INT:size, STR:font_path=\"\", TNS:color, TNS:bgcolor, INT:antialiasing=1):TNS")
+    ext.register_operator("RESIZE", 3, 4, _op_resize, doc="RESIZE(TNS:img, INT:new_width, INT:new_height, INT:antialiasing=1):TNS")
+    ext.register_operator("CELLSHADE", 2, 2, _op_cellshade, doc="CELLSHADE(TNS:img, TNS:colors):TNS (map pixels to nearest palette color)")
+    ext.register_operator("THRESHHOLD_A", 2, 3, _op_thresh_a, doc="THRESHHOLD_A(TNS:img, INT:a, TNS:color=[0,0,0,0]):TNS")
+    ext.register_operator("THRESHHOLD_R", 2, 3, _op_thresh_r, doc="THRESHHOLD_R(TNS:img, INT:r, TNS:color=[0,0,0,0]):TNS")
+    ext.register_operator("THRESHHOLD_G", 2, 3, _op_thresh_g, doc="THRESHHOLD_G(TNS:img, INT:g, TNS:color=[0,0,0,0]):TNS")
+    ext.register_operator("THRESHHOLD_B", 2, 3, _op_thresh_b, doc="THRESHHOLD_B(TNS:img, INT:b, TNS:color=[0,0,0,0]):TNS")

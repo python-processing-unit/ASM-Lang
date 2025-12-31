@@ -332,7 +332,7 @@ def read_asmx(pointer_file: str) -> List[str]:
     base_dir = os.path.dirname(os.path.abspath(pointer_file))
     out: List[str] = []
     with open(pointer_file, "r", encoding="utf-8") as handle:
-        for raw in handle.read().splitlines():
+        for raw in handle:
             line = raw.strip()
             if not line or line.startswith("#"):
                 continue

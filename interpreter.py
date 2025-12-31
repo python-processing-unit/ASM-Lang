@@ -654,10 +654,7 @@ class Builtins:
             return Value(TYPE_INT, self._lcm(a, b))
         if not float(a).is_integer() or not float(b).is_integer():
             raise ASMRuntimeError("LCM expects integer-valued floats", location=location, rewrite_rule="LCM")
-        ia, ib = int(a), int(b)
-        if ia == 0 or ib == 0:
-            return Value(TYPE_FLT, 0.0)
-        return Value(TYPE_FLT, float(abs(ia * ib) // math.gcd(ia, ib)))
+        return Value(TYPE_FLT, float(math.lcm(int(a), int(b))))
 
     def _gt(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         _, a, b = self._expect_num_pair(args, "GT", location)
@@ -812,16 +809,10 @@ class Builtins:
         first_type = values[0].type
         if first_type == TYPE_INT:
             ints = [self._expect_int(v, "PROD", location) for v in values]
-            result = 1
-            for val in ints:
-                result *= val
-            return Value(TYPE_INT, result)
+            return Value(TYPE_INT, math.prod(ints))
         if first_type == TYPE_FLT:
             flts = [self._expect_flt(v, "PROD", location) for v in values]
-            result_f = 1.0
-            for val in flts:
-                result_f *= val
-            return Value(TYPE_FLT, float(result_f))
+            return Value(TYPE_FLT, float(math.prod(flts)))
         raise ASMRuntimeError("PROD expects INT or FLT arguments", location=location, rewrite_rule="PROD")
 
     def _max(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
@@ -1399,7 +1390,8 @@ class Builtins:
 
         lexer = Lexer(source_text, module_path)
         tokens = lexer.tokenize()
-        parser = Parser(tokens, module_path, source_text.splitlines(), type_names=interpreter.type_registry.names())
+        source_lines = source_text.splitlines()
+        parser = Parser(tokens, module_path, source_lines, type_names=interpreter.type_registry.names())
         program = parser.parse()
 
         module_env = Environment()
@@ -1490,7 +1482,8 @@ class Builtins:
 
         lexer = Lexer(source_text, run_filename)
         tokens = lexer.tokenize()
-        parser = Parser(tokens, run_filename, source_text.splitlines(), type_names=interpreter.type_registry.names())
+        source_lines = source_text.splitlines()
+        parser = Parser(tokens, run_filename, source_lines, type_names=interpreter.type_registry.names())
         program = parser.parse()
 
         # Execute parsed statements in the caller's environment so that
@@ -1965,12 +1958,26 @@ class Builtins:
     def _map_tensor_int_binary(self, x: Tensor, y: Tensor, rule: str, location: SourceLocation, op: Callable[[int, int], int]) -> Tensor:
         if x.shape != y.shape:
             raise ASMRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
-        out = np.empty(x.data.size, dtype=object)
-        i = 0
-        expect_int = self._expect_int
-        for a, b in zip(x.data.flat, y.data.flat):
-            out[i] = Value(TYPE_INT, op(expect_int(a, rule, location), expect_int(b, rule, location)))
-            i += 1
+        # Use ravel() and indexed loop to avoid per-iteration tuple allocation
+        x_flat = x.data.ravel()
+        y_flat = y.data.ravel()
+        n = x_flat.size
+        out = np.empty(n, dtype=object)
+        # Validate element types once and then access .value directly
+        if n == 0:
+            return Tensor(shape=list(x.shape), data=np.array([], dtype=object))
+        if x_flat[0].type != TYPE_INT:
+            raise ASMRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
+        for v in x_flat:
+            if v.type != TYPE_INT:
+                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+        for v in y_flat:
+            if v.type != TYPE_INT:
+                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+        for i in range(n):
+            a = int(x_flat[i].value)
+            b = int(y_flat[i].value)
+            out[i] = Value(TYPE_INT, op(a, b))
         return Tensor(shape=list(x.shape), data=out)
 
     def _map_tensor_numeric_binary(
@@ -1987,34 +1994,57 @@ class Builtins:
         if x.data.size == 0:
             # Shapes are validated elsewhere to be positive, but keep safe.
             return Tensor(shape=list(x.shape), data=np.array([], dtype=object))
-        first_type = x.data.flat[0].type
+        # Use flattened views and indexed loops for better performance
+        x_flat = x.data.ravel()
+        y_flat = y.data.ravel()
+        first_type = x_flat[0].type
         if first_type not in (TYPE_INT, TYPE_FLT):
             raise ASMRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
-        if any(v.type != first_type for v in x.data.flat) or any(v.type != first_type for v in y.data.flat):
-            raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+        # Validate uniform element types in both tensors
+        for v in x_flat:
+            if v.type != first_type:
+                raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+        for v in y_flat:
+            if v.type != first_type:
+                raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+
+        n = x_flat.size
+        out = np.empty(n, dtype=object)
         if first_type == TYPE_INT:
-            out = np.empty(x.data.size, dtype=object)
-            i = 0
-            expect_int = self._expect_int
-            for a, b in zip(x.data.flat, y.data.flat):
-                out[i] = Value(TYPE_INT, op_int(expect_int(a, rule, location), expect_int(b, rule, location)))
-                i += 1
+            # Validate and then access int values directly to avoid repeated checks
+            for v in x_flat:
+                if v.type != TYPE_INT:
+                    raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+            for v in y_flat:
+                if v.type != TYPE_INT:
+                    raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+            for i in range(n):
+                a = int(x_flat[i].value)
+                b = int(y_flat[i].value)
+                out[i] = Value(TYPE_INT, op_int(a, b))
             return Tensor(shape=list(x.shape), data=out)
 
-        out = np.empty(x.data.size, dtype=object)
-        i = 0
-        for a, b in zip(x.data.flat, y.data.flat):
+        for i in range(n):
+            a = x_flat[i]
+            b = y_flat[i]
             out[i] = Value(TYPE_FLT, op_flt(float(a.value), float(b.value)))
-            i += 1
         return Tensor(shape=list(x.shape), data=out)
 
     def _map_tensor_int_scalar(self, tensor: Tensor, scalar: int, rule: str, location: SourceLocation, op: Callable[[int, int], int]) -> Tensor:
-        out = np.empty(tensor.data.size, dtype=object)
-        i = 0
-        expect_int = self._expect_int
-        for entry in tensor.data.flat:
-            out[i] = Value(TYPE_INT, op(expect_int(entry, rule, location), scalar))
-            i += 1
+        flat = tensor.data.ravel()
+        n = flat.size
+        out = np.empty(n, dtype=object)
+        # Validate element types once, then use direct int access
+        if n == 0:
+            return Tensor(shape=list(tensor.shape), data=np.array([], dtype=object))
+        if flat[0].type != TYPE_INT:
+            raise ASMRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
+        for v in flat:
+            if v.type != TYPE_INT:
+                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+        for i in range(n):
+            entry = int(flat[i].value)
+            out[i] = Value(TYPE_INT, op(entry, scalar))
         return Tensor(shape=list(tensor.shape), data=out)
 
     def _map_tensor_numeric_scalar(
@@ -2028,28 +2058,28 @@ class Builtins:
     ) -> Tensor:
         if tensor.data.size == 0:
             return Tensor(shape=list(tensor.shape), data=np.array([], dtype=object))
-        first_type = tensor.data.flat[0].type
+        flat = tensor.data.ravel()
+        first_type = flat[0].type
         if first_type not in (TYPE_INT, TYPE_FLT):
             raise ASMRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
         if scalar.type != first_type:
             raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
-        if any(v.type != first_type for v in tensor.data.flat):
-            raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+        for v in flat:
+            if v.type != first_type:
+                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+
+        n = flat.size
+        out = np.empty(n, dtype=object)
         if first_type == TYPE_INT:
-            sc = self._expect_int(scalar, rule, location)
-            out = np.empty(tensor.data.size, dtype=object)
-            i = 0
-            expect_int = self._expect_int
-            for entry in tensor.data.flat:
-                out[i] = Value(TYPE_INT, op_int(expect_int(entry, rule, location), sc))
-                i += 1
+            sc = int(scalar.value)
+            for i in range(n):
+                entry = int(flat[i].value)
+                out[i] = Value(TYPE_INT, op_int(entry, sc))
             return Tensor(shape=list(tensor.shape), data=out)
         scf = float(scalar.value)
-        out = np.empty(tensor.data.size, dtype=object)
-        i = 0
-        for entry in tensor.data.flat:
-            out[i] = Value(TYPE_FLT, op_flt(float(entry.value), scf))
-            i += 1
+        for i in range(n):
+            entry = float(flat[i].value)
+            out[i] = Value(TYPE_FLT, op_flt(entry, scf))
         return Tensor(shape=list(tensor.shape), data=out)
 
     def _ensure_tensor_ints(self, tensor: Tensor, rule: str, location: SourceLocation) -> None:
@@ -2948,6 +2978,9 @@ class Interpreter:
                     lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "ASSIGN", statement.location)
                     hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "ASSIGN", statement.location)
                     indexers.append(slice(lo_res - 1, hi_res))
+                elif type(node).__name__ == "Star":
+                    # Full-dimension slice `*` selects the entire axis
+                    indexers.append(slice(None, None))
                 else:
                     raw = expect_int(eval_expr(node, env), "ASSIGN", statement.location)
                     idx_res = self._resolve_tensor_index(raw, base_val.value.shape[dim], "ASSIGN", statement.location)
@@ -3172,9 +3205,12 @@ class Interpreter:
         return size
 
     def _tensor_truthy(self, tensor: Tensor) -> bool:
+        # Iterate over a flattened view with a local binding for the
+        # condition evaluator to reduce attribute lookups in tight loops.
         cond_int = self._condition_int
-        for item in tensor.data.flat:
-            if cond_int(item, None) != 0:
+        flat = tensor.data.ravel()
+        for i in range(flat.size):
+            if cond_int(flat[i], None) != 0:
                 return True
         return False
 
@@ -3198,7 +3234,15 @@ class Interpreter:
     def _tensor_equal(self, left: Tensor, right: Tensor) -> bool:
         if left.shape != right.shape:
             return False
-        return all(self._values_equal(a, b) for a, b in zip(left.data.flat, right.data.flat))
+        # Use indexed loops over ravel() to avoid tuple allocations and
+        # generator overhead in large tensors.
+        l_flat = left.data.ravel()
+        r_flat = right.data.ravel()
+        n = l_flat.size
+        for i in range(n):
+            if not self._values_equal(l_flat[i], r_flat[i]):
+                return False
+        return True
 
     def _validate_tensor_shape(self, shape: List[int], rule: str, location: SourceLocation) -> None:
         if not shape:

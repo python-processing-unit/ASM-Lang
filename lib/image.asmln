@@ -5,7 +5,7 @@
 # LOAD_PNG(STR: path):TNS[width,height,[r,g,b,a]]
 # LOAD_JPEG(STR: path):TNS[width,height,[r,g,b,a]]
 # LOAD_BMP(STR: path):TNS[width,height,[r,g,b,a]]
-# LOAD_IMG(STR: path):TNS[height,width,[r,g,b,a]]  # auto-detects format by extension
+# LOAD(STR: path):TNS[height,width,[r,g,b,a]]  # auto-detects format by extension
 # SAVE_PNG(TNS: img, STR: path, INT: compression_level)
 # SAVE_JPEG(TNS: img, STR: path, INT: compression_level)
 # SAVE_BMP(TNS: img, STR: path)
@@ -26,16 +26,23 @@
 # PIXEL_G(TNS: img, INT: x, INT: y):INT
 # PIXEL_B(TNS: img, INT: x, INT: y):INT
 # PIXEL_A(TNS: img, INT: x, INT: y):INT
+# THRESHHOLD_A(TNS:img, INT:a, TNS:color=[0,0,0,0]):TNS
+# THRESHHOLD_R(TNS:img, INT:r, TNS:color=[0,0,0,0]):TNS
+# THRESHHOLD_G(TNS:img, INT:g, TNS:color=[0,0,0,0]):TNS
+# THRESHHOLD_B(TNS:img, INT:b, TNS:color=[0,0,0,0]):TNS
 # FLIP_V(TNS: img):TNS
 # FLIP_H(TNS: img):TNS
 # INVERT(TNS: img):TNS
 # SCALE(TNS: src, INT: scale_x, INT: scale_y, INT: antialiasing = 1):TNS
+# RESIZE(TNS: img, INT: new_width, INT: new_height, INT: antialiasing = 1):TNS
 # CROP(TNS:img, TNS:corners[[tl_x,tl_y],[tr_x,tr_y],[bl_x,bl_y],[br_x,br_y]]):TNS
 # ROTATE(TNS: img, FLT: degrees):TNS
 # BLIT(TNS: src, TNS: dest, INT: x, INT: y, INT: mixalpha = 1):TNS
 # GRAYSCALE(TNS: img):TNS  # three-channel grayscale (rgb=luminance, alpha preserved)
 # REPLACE_COLOR(TNS: img, TNS: target_color, TNS: replacement_color):TNS
 # BLUR(TNS: img, INT: radius):TNS  # gaussian blur with integer radius
+# EDGE(TNS: img):TNS  # difference-of-gaussians edge detector
+# CELLSHADE(TNS: img, TNS: colors):TNS  # map pixels to nearest palette color
 # SHOW(TNS: img):INT  # saves to temp file and opens with default viewer (Windows only)
 #
 # The returned tensor layout is [column][row][channel] (width, height, channel)
@@ -43,7 +50,7 @@
 
 IMPORT(path)
 
-FUNC LOAD_IMG(STR: img_path):TNS{
+FUNC LOAD(STR: img_path):TNS{
     STR: ext = path.EXTNAME(img_path)
     IF(EQ(ext, "png")){
         RETURN(image.LOAD_PNG(img_path))

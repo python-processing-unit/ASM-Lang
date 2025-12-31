@@ -202,7 +202,7 @@ FUNC STDLIB_TESTS():INT{
     TNS: png = image.LOAD_PNG(png_path)
     DEL(png_path)
     # Convenience loader (auto-detect)
-    TNS: auto_png = image.LOAD_IMG(JOIN(path.interpreter_dir, "/icon.png"))
+    TNS: auto_png = image.LOAD(JOIN(path.interpreter_dir, "/icon.png"))
     ASSERT(EQ(auto_png, png))
     DEL(auto_png)
     image.LOAD_JPEG(jpeg_path)
@@ -269,7 +269,6 @@ FUNC STDLIB_TESTS():INT{
     # Additional image operator coverage
     STR: out_bmp = JOIN(path.interpreter_dir, "/out_test.bmp")
     STR: out_png = JOIN(path.interpreter_dir, "/out_test.png")
-    DEL(png)
     STR: out_jpeg = JOIN(path.interpreter_dir, "/out_test.jpg")
 
     # SHOW (only run on Windows to avoid opening viewers on other platforms)
@@ -342,6 +341,31 @@ FUNC STDLIB_TESTS():INT{
     ASSERT(EQ(image.HEIGHT(scaled2), MUL(image.HEIGHT(bmp), 10)))
     DEL(scaled2)
 
+    # RESIZE: downscale and upscale preserve requested dimensions
+    INT: orig_w = image.WIDTH(png)
+    INT: orig_h = image.HEIGHT(png)
+    INT: half_w = DIV(orig_w, 10)
+    INT: half_h = DIV(orig_h, 10)
+    TNS: resized_small = image.RESIZE(png, half_w, half_h, 1)
+    ASSERT(EQ(image.WIDTH(resized_small), half_w))
+    ASSERT(EQ(image.HEIGHT(resized_small), half_h))
+    DEL(resized_small)
+
+    INT: dbl_w = MUL(orig_w, 10)
+    INT: dbl_h = MUL(orig_h, 10)
+    TNS: resized_big = image.RESIZE(png, dbl_w, dbl_h, 1)
+    DEL(png)
+    ASSERT(EQ(image.WIDTH(resized_big), dbl_w))
+    ASSERT(EQ(image.HEIGHT(resized_big), dbl_h))
+    DEL(resized_big)
+
+    DEL(orig_w)
+    DEL(orig_h)
+    DEL(half_w)
+    DEL(half_h)
+    DEL(dbl_w)
+    DEL(dbl_h)
+
     # ROTATE by 0 degrees is identity
     TNS: rot0 = image.ROTATE(bmp, 0.0)
     ASSERT(EQ(rot0, bmp))
@@ -405,6 +429,51 @@ FUNC STDLIB_TESTS():INT{
     # Cleanup small canvas
     DEL(small)
     DEL(red)
+
+    # New tests: threshold operators, edge detector, and cellshade
+    TNS: th_canvas = TNS([1011,1011,100], 0)
+    TNS: red2 = [11111111, 0, 0, 11111111]
+    TNS: filled_th = image.FILL_RECT(th_canvas, 1, 1, 101, 101, red2)
+
+    TNS: out_ta = image.THRESHHOLD_A(filled_th, 10111111)
+    ASSERT(EQ(TLEN(out_ta, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(out_ta), image.CHANNELS(filled_th)))
+    DEL(out_ta)
+
+    TNS: out_tr = image.THRESHHOLD_R(filled_th, 10111111)
+    ASSERT(EQ(TLEN(out_tr, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(out_tr), image.CHANNELS(filled_th)))
+    DEL(out_tr)
+
+    TNS: out_tg = image.THRESHHOLD_G(filled_th, 10111111)
+    ASSERT(EQ(TLEN(out_tg, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(out_tg), image.CHANNELS(filled_th)))
+    DEL(out_tg)
+
+    TNS: out_tb = image.THRESHHOLD_B(filled_th, 10111111)
+    ASSERT(EQ(TLEN(out_tb, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(out_tb), image.CHANNELS(filled_th)))
+    DEL(out_tb)
+
+    # Edge detector should preserve shape and channels
+    TNS: edge_out = image.EDGE(filled_th)
+    ASSERT(EQ(TLEN(edge_out, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(edge_out), image.CHANNELS(filled_th)))
+    DEL(edge_out)
+
+    # Cellshade maps pixels to palette; ensure output shape and channels preserved
+    TNS: pal = [ ^
+        [11111111, 0, 0, 11111111], ^
+        [0, 11111111, 0, 11111111] ^
+    ]
+    TNS: cs_out = image.CELLSHADE(filled_th, pal)
+    ASSERT(EQ(TLEN(cs_out, 1), TLEN(filled_th, 1)))
+    ASSERT(EQ(image.CHANNELS(cs_out), image.CHANNELS(filled_th)))
+    DEL(cs_out)
+
+    DEL(filled_th)
+    DEL(red2)
+    DEL(th_canvas)
 
     PRINT("Image library tests passed.")
     PRINT()
