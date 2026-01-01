@@ -443,6 +443,9 @@ class Builtins:
         self._register_custom("FLIP", 1, 1, self._flip)
         self._register_custom("TFLIP", 2, 2, self._tflip)
         self._register_custom("SCATTER", 3, 3, self._scatter)
+        # PARALLEL accepts either a single TNS of functions, or any number
+        # of function arguments passed directly (variadic form).
+        self._register_custom("PARALLEL", 1, None, self._parallel)
 
     def _register_int_only(self, name: str, arity: int, func: Callable[..., int]) -> None:
         def impl(_: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -2411,6 +2414,66 @@ class Builtins:
         src_view = src.data.reshape(tuple(src.shape))
         dst_view[tuple(slice(start, end) for start, end in slices)] = src_view
         return Value(TYPE_TNS, Tensor(shape=list(dst.shape), data=out_data))
+
+    def _parallel(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        """PARALLEL(TNS: functions):INT
+
+        Execute each element of the `functions` tensor in parallel. Each
+        element must be a `FUNC` value. Wait for all to complete and return
+        integer 0 on success. If any element is not a function or any
+        invocation raises, an ASMRuntimeError is raised.
+        """
+        # Support two forms:
+        #  - PARALLEL(TNS: functions)
+        #  - PARALLEL(FUNC, FUNC, ...)
+        elems: List[Any]
+        if len(args) == 1 and args[0].type == TYPE_TNS:
+            tensor = args[0].value
+            data = tensor.data
+            flat = data.ravel()
+            elems = [flat[i] for i in range(flat.size)]
+        else:
+            elems = list(args)
+
+        n = len(elems)
+        results: List[Optional[Value]] = [None] * n
+        errors: List[Optional[BaseException]] = [None] * n
+
+        def worker(idx: int, elem: Any) -> None:
+            try:
+                if not isinstance(elem, Value) or elem.type != TYPE_FUNC:
+                    raise ASMRuntimeError("PARALLEL expects functions (either a tensor of FUNC or FUNC arguments)", location=location, rewrite_rule="PARALLEL")
+                func = elem.value
+                # Invoke with no args and the provided environment as closure
+                res = interpreter._invoke_function_object(func, [], {}, location, ___)
+                results[idx] = res
+            except BaseException as exc:
+                errors[idx] = exc
+
+        threads: List[threading.Thread] = []
+        for i in range(n):
+            t = threading.Thread(target=worker, args=(i, elems[i]))
+            t.start()
+            threads.append(t)
+
+        for t in threads:
+            t.join()
+
+        # Propagate first error if any
+        for err in errors:
+            if err is not None:
+                if isinstance(err, ASMRuntimeError):
+                    raise err
+                raise ASMRuntimeError(f"PARALLEL worker failed: {err}", location=location, rewrite_rule="PARALLEL")
+
+        return Value(TYPE_INT, 0)
 
     def _convolve(
         self,
