@@ -402,6 +402,7 @@ class Builtins:
         self._register_custom("INPUT", 0, 1, self._input)
         self._register_custom("PRINT", 0, None, self._print)
         self._register_custom("ASSERT", 1, 1, self._assert)
+        self._register_custom("THROW", 0, None, self._throw)
         self._register_custom("DEL", 1, 1, self._delete)
         self._register_custom("FREEZE", 1, 1, self._freeze)
         self._register_custom("THAW", 1, 1, self._thaw)
@@ -443,8 +444,6 @@ class Builtins:
         self._register_custom("FLIP", 1, 1, self._flip)
         self._register_custom("TFLIP", 2, 2, self._tflip)
         self._register_custom("SCATTER", 3, 3, self._scatter)
-        # PARALLEL accepts either a single TNS of functions, or any number
-        # of function arguments passed directly (variadic form).
         self._register_custom("PARALLEL", 1, None, self._parallel)
 
     def _register_int_only(self, name: str, arity: int, func: Callable[..., int]) -> None:
@@ -1592,6 +1591,37 @@ class Builtins:
         if cond == 0:
             raise ASMRuntimeError("Assertion failed", location=location, rewrite_rule="ASSERT")
         return Value(TYPE_INT, 1)
+
+    def _throw(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # Render arguments the same way PRINT does, then raise with the
+        # concatenated string as the error message.
+        rendered: List[str] = []
+        for arg in args:
+            if arg.type == TYPE_INT:
+                number = self._expect_int(arg, "THROW", location)
+                rendered.append(("-" + format(-number, "b")) if number < 0 else format(number, "b"))
+            elif arg.type == TYPE_STR:
+                rendered.append(arg.value)  # type: ignore[arg-type]
+            else:
+                spec = interpreter.type_registry.get_optional(arg.type)
+                if spec is not None and spec.printable:
+                    ctx = TypeContext(interpreter=interpreter, location=location)
+                    rendered.append(spec.to_str(ctx, arg))
+                else:
+                    raise ASMRuntimeError(
+                        "THROW accepts INT or STR arguments",
+                        location=location,
+                        rewrite_rule="THROW",
+                    )
+        msg = "".join(rendered)
+        raise ASMRuntimeError(msg, location=location, rewrite_rule="THROW")
 
     def _delete(
         self,

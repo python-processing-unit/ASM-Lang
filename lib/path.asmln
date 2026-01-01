@@ -81,8 +81,7 @@ FUNC TEMPFILE(STR: local_path):STR{
     IF(EQ(OS(),"win")){
         STR: temp = "C:/Windows/Temp/"
     } ELSE {
-        PRINT("TEMPFILE not implemented for ", OS())
-        ASSERT(0)
+        ASSERT("TEMPFILE not implemented for ", OS())
     }
     STR: final_path = JOIN(temp, local_path)
     DEL(temp)

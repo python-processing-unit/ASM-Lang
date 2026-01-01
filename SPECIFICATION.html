@@ -344,6 +344,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `STRIP(STR: string, STR: remove):STR` — Returns a `STR` formed by removing every occurrence of the substring `remove` from `string`. The `remove` argument must be a non-empty string; supplying an empty `remove` raises a runtime error.
 - `REPLACE(STR: string, STR: a, STR: b):STR` — Returns a `STR` formed by replacing every occurrence of the substring `a` in `string` with `b`. The `a` argument must be a non-empty string; supplying an empty `a` raises a runtime error.
 - `ASSERT(ANY: a)` ; crashes if `INT`-style` truthiness of `a` is 0
+- `THROW(INT|STR: a1, INT|STR: a2, ...):STR` ; concatenates its arguments using the same rendering rules as `PRINT` and raises a runtime error with the resulting string as the message (rewrite: `THROW`).
 - `MAIN():INT` — Returns `1` when the call site belongs to the primary program file (the file passed as the interpreter's first argument, or `<string>` when `-source` is used). Returns `0` when executed from code that came from an `IMPORT` (including nested imports). The result is determined solely by the source file that contains the call expression, not by the caller's call stack.
 - `DEL(SYMBOL: x)` ; delete variable `x` from environment
 - `EXIT()` or `EXIT(INT:code)` — Requests immediate termination of the interpreter. If an integer `code` is supplied, it is used as the interpreter's process exit code; otherwise `0` is used. Execution stops immediately when `EXIT` is executed (no further statements run), and an entry is recorded in the state log to make deterministic replay possible. Using `EXIT` inside a function terminates the entire program (not just the function).
@@ -505,6 +506,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `CONTINUE()` ; skip remaining statements in the innermost loop iteration and proceed to the next iteration; if used in the last iteration it acts like `BREAK(1)`. Using `CONTINUE()` outside of a loop is a runtime error.
 - `GOTOPOINT(n)` ; register a gotopoint with identifier `n` at this statement's location (identifier may be `INT` or `STR`) (n evaluated at runtime). Gotopoints are visible across the containing function or top-level scope rather than being restricted to a single lexical block.
 - `GOTO(n)` ; jump to a previously-registered gotopoint with identifier `n` (`INT` or `STR`) within the same function or top-level scope; runtime error if not registered in that scope
+- `ASYNC{ block }` ; execute `block` asynchronously in a separate thread (while sharing the same namespace); the caller continues executing immediately without waiting for the async block to complete. Any uncaught errors in the async block are logged to the interpreter's error log but do not affect the caller.
 
 ### Notes
 - Built-ins are statically typed. Boolean contexts treat `INT` 0 as false and non-zero as true; `FLT` is false when 0.0 and true otherwise; `STR` is false when empty and true when non-empty unless a rule explicitly converts via `INT`. A `TNS` is true if any element is true by those rules.

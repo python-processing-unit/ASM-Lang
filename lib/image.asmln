@@ -59,8 +59,7 @@ FUNC LOAD(STR: img_path):TNS{
     } ELSEIF (EQ(ext, "bmp")){
         RETURN(image.LOAD_BMP(img_path))
     } ELSE {
-        PRINT("Unsupported image format: ",ext)
-        ASSERT(0)
+        THROW("Unsupported image format: ",ext)
     }
 }
 

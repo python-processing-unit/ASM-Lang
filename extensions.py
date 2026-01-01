@@ -313,13 +313,16 @@ def load_extension_module(path: str) -> Any:
     try:
         try:
             spec.loader.exec_module(module)  # type: ignore[union-attr]
-        except Exception:
+        except Exception as exc:
             # restore previous sys.modules state
             if prev_mod is None:
                 sys.modules.pop(mod_name, None)
             else:
                 sys.modules[mod_name] = prev_mod
-            raise
+            # Never allow a Python traceback to escape due to extension code.
+            raise ASMExtensionError(
+                f"Failed to load extension module {path}: {exc.__class__.__name__}: {exc}"
+            )
     finally:
         if sys.path and sys.path[0] == ext_dir:
             sys.path.pop(0)

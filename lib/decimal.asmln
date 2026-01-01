@@ -19,7 +19,7 @@ FUNC DEC_CHAR_TO_INT(STR:ch):INT{
     IF(EQ(ch, "7")){ RETURN(111) }
     IF(EQ(ch, "8")){ RETURN(1000) }
     IF(EQ(ch, "9")){ RETURN(1001) }
-    ASSERT(0)
+    THROW("Invalid decimal character: '", ch, "'")
     RETURN(0)
 }
 
@@ -34,7 +34,7 @@ FUNC INT_TO_DEC_CHAR(INT:d):STR{
     IF(EQ(d, 111)){ RETURN("7") }
     IF(EQ(d, 1000)){ RETURN("8") }
     IF(EQ(d, 1001)){ RETURN("9") }
-    ASSERT(0)
+    THROW("Invalid decimal digit: '", INT_TO_DEC(d), "'")
     RETURN("")
 }
 

@@ -12,6 +12,40 @@ from lexer import ASMParseError, Lexer
 from parser import Parser, Statement
 
 
+def _print_internal_error(*, exc: BaseException, interpreter: Optional[Interpreter] = None, verbose: bool = False, traceback_json: bool = False) -> int:
+    """Last-resort error handler.
+
+    Requirement: no ASM-Lang error should ever surface as a Python traceback.
+    """
+    # Let deliberate exits behave normally.
+    if isinstance(exc, SystemExit):
+        raise exc
+    if isinstance(exc, KeyboardInterrupt):
+        print("Interrupted", file=sys.stderr)
+        return 130
+
+    message = f"InternalError: {exc.__class__.__name__}: {exc}"
+    if interpreter is not None:
+        try:
+            location = None
+            if interpreter.logger.entries:
+                location = interpreter.logger.entries[-1].source_location
+            error = ASMRuntimeError(message, location=location, rewrite_rule="INTERNAL")
+            if interpreter.logger.entries:
+                error.step_index = interpreter.logger.entries[-1].step_index
+            formatter = TracebackFormatter(interpreter)
+            print(formatter.format_text(error, verbose=verbose), file=sys.stderr)
+            if traceback_json:
+                print(formatter.to_json(error), file=sys.stderr)
+            return 1
+        except Exception:
+            # If formatting itself fails, fall back to a simple one-liner.
+            pass
+
+    print(message, file=sys.stderr)
+    return 1
+
+
 def _parse_statements_from_source(text: str, filename: str, *, type_names: Optional[set[str]] = None) -> List[Statement]:
     lexer = Lexer(text, filename)
     tokens = lexer.tokenize()
@@ -44,7 +78,13 @@ def run_repl(*, verbose: bool, services) -> int:
                 output_sink=_output_sink,
             ),
         )
-        return runner(ctx)
+        try:
+            return runner(ctx)
+        except ASMExtensionError as exc:
+            print(f"ExtensionError: {exc}", file=sys.stderr)
+            return 1
+        except BaseException as exc:
+            return _print_internal_error(exc=exc, interpreter=None, verbose=verbose)
 
     try:
         interpreter = Interpreter(
@@ -58,6 +98,8 @@ def run_repl(*, verbose: bool, services) -> int:
     except ASMExtensionError as exc:
         print(f"ExtensionError: {exc}", file=sys.stderr)
         return 1
+    except BaseException as exc:
+        return _print_internal_error(exc=exc, interpreter=None, verbose=verbose)
     global_env = Environment()
     # Make the REPL top-level frame mimic script top-level frame
     global_frame = interpreter._new_frame("<top-level>", global_env, None)
@@ -93,9 +135,17 @@ def run_repl(*, verbose: bool, services) -> int:
                     interpreter._execute_block(statements, global_env)
                 except ExitSignal as sig:
                     return sig.code
+                except ASMRuntimeError as error:
+                    if interpreter.logger.entries:
+                        error.step_index = interpreter.logger.entries[-1].step_index
+                    formatter = TracebackFormatter(interpreter)
+                    print(formatter.format_text(error, verbose=interpreter.verbose), file=sys.stderr)
+                    interpreter.call_stack = [global_frame]
             except ASMParseError:
                 # If a single-line parse fails, treat it as start of multi-line input
                 buffer.append(line)
+            except BaseException as exc:
+                _print_internal_error(exc=exc, interpreter=interpreter, verbose=verbose)
             continue
 
         if stripped == "" and buffer:
@@ -115,19 +165,28 @@ def run_repl(*, verbose: bool, services) -> int:
                 print(formatter.format_text(error, verbose=interpreter.verbose), file=sys.stderr)
                 # reset call stack to single top-level frame to keep REPL usable
                 interpreter.call_stack = [global_frame]
+            except BaseException as exc:
+                _print_internal_error(exc=exc, interpreter=interpreter, verbose=verbose)
+                interpreter.call_stack = [global_frame]
             continue
 
         buffer.append(line)
 
 
 def run_cli(argv: Optional[List[str]] = None) -> int:
-    parser = argparse.ArgumentParser(description="ASM-Lang reference interpreter")
-    parser.add_argument("inputs", nargs="*", help="Program path/source and/or extension files (.py/.asmxt)")
-    parser.add_argument("--ext", action="append", default=[], help="Extension path (.py) or pointer file (.asmxt)")
-    parser.add_argument("-source", "--source", dest="source_mode", action="store_true", help="Treat program argument as literal source text")
-    parser.add_argument("-verbose", "--verbose", dest="verbose", action="store_true", help="Emit env snapshots in tracebacks")
-    parser.add_argument("--traceback-json", action="store_true", help="Also emit JSON traceback")
-    args = parser.parse_args(argv)
+    try:
+        parser = argparse.ArgumentParser(description="ASM-Lang reference interpreter")
+        parser.add_argument("inputs", nargs="*", help="Program path/source and/or extension files (.py/.asmxt)")
+        parser.add_argument("--ext", action="append", default=[], help="Extension path (.py) or pointer file (.asmxt)")
+        parser.add_argument("-source", "--source", dest="source_mode", action="store_true", help="Treat program argument as literal source text")
+        parser.add_argument("-verbose", "--verbose", dest="verbose", action="store_true", help="Emit env snapshots in tracebacks")
+        parser.add_argument("--traceback-json", action="store_true", help="Also emit JSON traceback")
+        args = parser.parse_args(argv)
+    except SystemExit:
+        # argparse uses SystemExit for -h and parse failures; preserve behavior.
+        raise
+    except BaseException as exc:
+        return _print_internal_error(exc=exc, interpreter=None)
 
     inputs: List[str] = list(args.inputs or [])
     ext_paths: List[str] = list(args.ext or [])
@@ -171,6 +230,8 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
     except ASMExtensionError as exc:
         print(f"ExtensionError: {exc}", file=sys.stderr)
         return 1
+    except BaseException as exc:
+        return _print_internal_error(exc=exc, interpreter=None, verbose=bool(getattr(args, "verbose", False)))
 
     program: Optional[str] = None
     if remaining:
@@ -198,11 +259,15 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
             print(f"Failed to read {filename}: {exc}", file=sys.stderr)
             return 1
 
+    interpreter: Optional[Interpreter] = None
     try:
         interpreter = Interpreter(source=source_text, filename=filename, verbose=args.verbose, services=services)
     except ASMExtensionError as exc:
         print(f"ExtensionError: {exc}", file=sys.stderr)
         return 1
+    except BaseException as exc:
+        return _print_internal_error(exc=exc, interpreter=None, verbose=args.verbose, traceback_json=args.traceback_json)
+
     try:
         interpreter.run()
     except ASMParseError as error:
@@ -216,8 +281,20 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
         if args.traceback_json:
             print(formatter.to_json(error), file=sys.stderr)
         return 1
+    except BaseException as exc:
+        return _print_internal_error(exc=exc, interpreter=interpreter, verbose=args.verbose, traceback_json=args.traceback_json)
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(run_cli())
+    try:
+        raise SystemExit(run_cli())
+    except KeyboardInterrupt:
+        print("Interrupted", file=sys.stderr)
+        raise SystemExit(130)
+    except SystemExit:
+        raise
+    except BaseException as exc:
+        # Absolute last-resort catch: never print a Python traceback.
+        code = _print_internal_error(exc=exc, interpreter=None)
+        raise SystemExit(code)
