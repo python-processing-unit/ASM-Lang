@@ -169,7 +169,7 @@ class Identifier(Expression):
 
 @dataclass
 class CallExpression(Expression):
-    name: str
+    callee: Expression
     args: List["CallArgument"]
 
 
@@ -191,7 +191,7 @@ class Parser:
         self.tokens = tokens
         self.filename = filename
         self.source_lines = source_lines
-        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS"}
+        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS", "FUNC"}
         self.index = 0
 
     def _parse_flt_literal(self, raw: str, *, token: Token) -> float:
@@ -389,8 +389,15 @@ class Parser:
 
     def _parse_expression(self) -> Expression:
         expr = self._parse_primary()
-        while self._peek().type == "LBRACKET":
-            expr = self._parse_index_suffix(expr)
+        while True:
+            tok_type = self._peek().type
+            if tok_type == "LBRACKET":
+                expr = self._parse_index_suffix(expr)
+                continue
+            if tok_type == "LPAREN":
+                expr = self._parse_call_suffix(expr)
+                continue
+            break
         return expr
 
     def _parse_primary(self) -> Expression:
@@ -417,26 +424,6 @@ class Parser:
         if token.type == "IDENT":
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
-            if self._match("LPAREN"):
-                args: List[CallArgument] = []
-                seen_kw = False
-                if self._peek().type != "RPAREN":
-                    while True:
-                        if self._peek().type == "IDENT" and self._peek_next().type == "EQUALS":
-                            name_tok = self._consume("IDENT")
-                            self._consume("EQUALS")
-                            arg_expr = self._parse_expression()
-                            seen_kw = True
-                            args.append(CallArgument(name=name_tok.value, expression=arg_expr))
-                        else:
-                            if seen_kw:
-                                raise ASMParseError(
-                                    f"Positional argument cannot follow keyword argument at line {self._peek().line}")
-                            args.append(CallArgument(name=None, expression=self._parse_expression()))
-                        if not self._match("COMMA"):
-                            break
-                self._consume("RPAREN")
-                return CallExpression(location=location, name=ident.value, args=args)
             return Identifier(location=location, name=ident.value)
         if token.type == "LPAREN":
             self._consume("LPAREN")
@@ -479,6 +466,28 @@ class Parser:
         if not isinstance(expr, IndexExpression):
             raise ASMParseError(f"Invalid indexed assignment at line {self._peek().line}")
         return expr
+
+    def _parse_call_suffix(self, callee: Expression) -> CallExpression:
+        lparen = self._consume("LPAREN")
+        args: List[CallArgument] = []
+        seen_kw = False
+        if self._peek().type != "RPAREN":
+            while True:
+                if self._peek().type == "IDENT" and self._peek_next().type == "EQUALS":
+                    name_tok = self._consume("IDENT")
+                    self._consume("EQUALS")
+                    arg_expr = self._parse_expression()
+                    seen_kw = True
+                    args.append(CallArgument(name=name_tok.value, expression=arg_expr))
+                else:
+                    if seen_kw:
+                        raise ASMParseError(
+                            f"Positional argument cannot follow keyword argument at line {self._peek().line}")
+                    args.append(CallArgument(name=None, expression=self._parse_expression()))
+                if not self._match("COMMA"):
+                    break
+        self._consume("RPAREN")
+        return CallExpression(location=self._location_from_token(lparen), callee=callee, args=args)
 
     def _parse_tensor_literal(self) -> TensorLiteral:
         lbracket = self._consume("LBRACKET")
@@ -573,14 +582,15 @@ class Parser:
         return SourceLocation(file=self.filename, line=token.line, column=token.column, statement=statement)
 
     def _consume_type_token(self) -> Token:
-        token = self._consume("IDENT")
+        token = self._peek()
         if token.value not in self.type_names:
             raise ASMParseError(f"Unknown type '{token.value}' at line {token.line}")
+        self.index += 1
         return token
 
     def _is_typed_assignment_start(self) -> bool:
         current = self._peek()
-        if current.type != "IDENT" or current.value not in self.type_names:
+        if current.value not in self.type_names:
             return False
         if self.index + 1 >= len(self.tokens):
             return False

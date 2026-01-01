@@ -53,6 +53,7 @@ TYPE_INT = "INT"
 TYPE_FLT = "FLT"
 TYPE_STR = "STR"
 TYPE_TNS = "TNS"
+TYPE_FUNC = "FUNC"
 
 # On Windows, command lines over a certain length cause CreateProcess errors
 WINDOWS_COMMAND_LENGTH_LIMIT = 8000
@@ -205,6 +206,9 @@ class Environment:
             if val.type == TYPE_TNS and isinstance(val.value, Tensor):
                 dims = ",".join(str(d) for d in val.value.shape)
                 return f"{val.type}:[{dims}]"
+            if val.type == TYPE_FUNC:
+                func_name = getattr(val.value, "name", "<func>")
+                return f"{val.type}:{func_name}"
             try:
                 rendered = str(val.value)
             except Exception:
@@ -2771,6 +2775,22 @@ class Interpreter:
                 seal=True,
             )
 
+        if not self.type_registry.has(TYPE_FUNC):
+            def _func_to_str(ctx: TypeContext, v: Value) -> str:
+                name = getattr(v.value, "name", None)
+                return f"<func {name}>" if name else "<func>"
+
+            self.type_registry.register(
+                TypeSpec(
+                    name=TYPE_FUNC,
+                    printable=True,
+                    condition_int=lambda ctx, v: 1,
+                    to_str=_func_to_str,
+                    equals=lambda ctx, a, b: a.value is b.value,
+                ),
+                seal=True,
+            )
+
         # Attach extension-provided operators. These are appended to the builtins
         # table but cannot override existing operator names.
         for name, min_args, max_args, impl, _doc in self.services.operators:
@@ -2843,6 +2863,14 @@ class Interpreter:
 
     def _expect_str(self, value: "Value", rule: str, location: SourceLocation) -> str:
         return self.builtins._expect_str(value, rule, location)
+
+    def _expect_func(self, value: "Value", rule: str, location: SourceLocation) -> Function:
+        if value.type != TYPE_FUNC:
+            raise ASMRuntimeError(f"{rule} expects function value", location=location, rewrite_rule=rule)
+        func_obj = value.value
+        if not isinstance(func_obj, Function):
+            raise ASMRuntimeError("Invalid function value", location=location, rewrite_rule=rule)
+        return func_obj
     def parse(self) -> Program:
         lexer = Lexer(self.source, self.filename)
         tokens = lexer.tokenize()
@@ -3092,6 +3120,12 @@ class Interpreter:
                 elif fn.return_type == TYPE_TNS:
                     raise ASMRuntimeError(
                         "TNS functions must RETURN a tensor value",
+                        location=statement.location,
+                        rewrite_rule="RETURN",
+                    )
+                elif fn.return_type == TYPE_FUNC:
+                    raise ASMRuntimeError(
+                        "FUNC functions must RETURN a function value",
                         location=statement.location,
                         rewrite_rule="RETURN",
                     )
@@ -3456,6 +3490,13 @@ class Interpreter:
             found = env.get_optional(expression.name)
             if found is not None:
                 return found
+            resolved_name: Optional[str] = None
+            if self.call_stack:
+                resolved_name = self._resolve_user_function_name(frame_name=self.call_stack[-1].name, callee=expression.name)
+            elif expression.name in self.functions:
+                resolved_name = expression.name
+            if resolved_name is not None:
+                return Value(TYPE_FUNC, self.functions[resolved_name])
             if expression.name == "INPUT":
                 self._emit_event("before_call", self, "INPUT", [], env, expression.location)
                 result = self.builtins.invoke(self, "INPUT", [], [], env, expression.location)
@@ -3468,7 +3509,27 @@ class Interpreter:
                 rewrite_rule="IDENT",
             )
         if isinstance(expression, CallExpression):
-            if expression.name == "IMPORT":
+            callee_expr = expression.callee
+            callee_ident = callee_expr.name if isinstance(callee_expr, Identifier) else None
+
+            bound_func_value = env.get_optional(callee_ident) if callee_ident is not None else None
+            resolved_function: Optional[Function] = None
+            alias_name: Optional[str] = None
+
+            if bound_func_value is not None:
+                resolved_function = self._expect_func(bound_func_value, "CALL", expression.location)
+                alias_name = callee_ident
+            elif callee_ident is not None:
+                func_name: Optional[str] = None
+                if self.call_stack:
+                    func_name = self._resolve_user_function_name(frame_name=self.call_stack[-1].name, callee=callee_ident)
+                elif callee_ident in self.functions:
+                    func_name = callee_ident
+                if func_name is not None:
+                    resolved_function = self.functions[func_name]
+                    alias_name = callee_ident
+
+            if resolved_function is None and callee_ident == "IMPORT":
                 if any(arg.name for arg in expression.args):
                     raise ASMRuntimeError("IMPORT does not accept keyword arguments", location=expression.location, rewrite_rule="IMPORT")
                 first_expr = expression.args[0].expression if expression.args else None
@@ -3476,32 +3537,34 @@ class Interpreter:
                 dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
                 arg_nodes = [arg.expression for arg in expression.args]
                 try:
-                    self._emit_event("before_call", self, expression.name, [], env, expression.location)
-                    result = self.builtins.invoke(self, expression.name, dummy_args, arg_nodes, env, expression.location)
+                    self._emit_event("before_call", self, "IMPORT", [], env, expression.location)
+                    result = self.builtins.invoke(self, "IMPORT", dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
                     self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "status": "error"})
                     raise
-                self._emit_event("after_call", self, expression.name, result, env, expression.location)
+                self._emit_event("after_call", self, "IMPORT", result, env, expression.location)
                 self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "result": result.value})
                 return result
-            if expression.name in ("DEL", "EXIST"):
+
+            if resolved_function is None and callee_ident in ("DEL", "EXIST"):
                 if any(arg.name for arg in expression.args):
                     raise ASMRuntimeError(
-                        f"{expression.name} does not accept keyword arguments",
+                        f"{callee_ident} does not accept keyword arguments",
                         location=expression.location,
-                        rewrite_rule=expression.name,
+                        rewrite_rule=callee_ident,
                     )
-                dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
+                dummy_args = [Value(TYPE_INT, 0)] * len(expression.args)
                 arg_nodes = [arg.expression for arg in expression.args]
                 try:
-                    self._emit_event("before_call", self, expression.name, [], env, expression.location)
-                    result = self.builtins.invoke(self, expression.name, dummy_args, arg_nodes, env, expression.location)
+                    self._emit_event("before_call", self, callee_ident, [], env, expression.location)
+                    result = self.builtins.invoke(self, callee_ident, dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
-                    self._log_step(rule=expression.name, location=expression.location, extra={"args": None, "status": "error"})
+                    self._log_step(rule=callee_ident, location=expression.location, extra={"args": None, "status": "error"})
                     raise
-                self._emit_event("after_call", self, expression.name, result, env, expression.location)
-                self._log_step(rule=expression.name, location=expression.location, extra={"args": None, "result": result.value})
+                self._emit_event("after_call", self, callee_ident, result, env, expression.location)
+                self._log_step(rule=callee_ident, location=expression.location, extra={"args": None, "result": result.value})
                 return result
+
             positional_args: List[Value] = []
             keyword_args: Dict[str, Value] = {}
             for arg in expression.args:
@@ -3513,86 +3576,95 @@ class Interpreter:
                         raise ASMRuntimeError(
                             f"Duplicate keyword argument '{arg.name}'",
                             location=expression.location,
-                            rewrite_rule=expression.name,
+                            rewrite_rule=callee_ident or "CALL",
                         )
                     keyword_args[arg.name] = value
-            func_name: Optional[str] = None
-            if self.call_stack:
-                func_name = self._resolve_user_function_name(frame_name=self.call_stack[-1].name, callee=expression.name)
-            else:
-                # Shouldn't happen in practice, but preserve behavior.
-                func_name = expression.name if expression.name in self.functions else None
-            if func_name is not None:
-                self._log_step(
-                    rule="CALL",
-                    location=expression.location,
-                    extra={
-                        "function": func_name,
-                        "positional": [a.value for a in positional_args],
-                        "keyword": {k: v.value for k, v in keyword_args.items()},
-                    },
-                )
-                self._emit_event("before_call", self, func_name, positional_args, env, expression.location)
-                return self._call_user_function(
-                    self.functions[func_name],
-                    positional_args,
-                    keyword_args,
-                    expression.location,
-                )
-            try:
-                if keyword_args:
-                    # Allow specific named keywords for certain builtins.
-                    if expression.name in {"READFILE", "WRITEFILE"}:
-                        allowed = {"coding"}
-                        key = "coding"
-                    elif expression.name == "BYTES":
-                        allowed = {"endian"}
-                        key = "endian"
-                    else:
-                        allowed = set()
-                        key = None
 
-                    unexpected = [k for k in keyword_args if k not in allowed]
-                    if unexpected:
-                        raise ASMRuntimeError(
-                            f"Unexpected keyword arguments: {', '.join(sorted(unexpected))}",
-                            location=expression.location,
-                            rewrite_rule=expression.name,
-                        )
-                    if key and key in keyword_args:
-                        positional_args.append(keyword_args.pop(key))
+            if resolved_function is not None:
+                return self._invoke_function_object(resolved_function, positional_args, keyword_args, expression.location, env, alias=alias_name)
+
+            if callee_ident is not None:
+                try:
                     if keyword_args:
-                        raise ASMRuntimeError(
-                            f"{expression.name} does not accept keyword arguments",
-                            location=expression.location,
-                            rewrite_rule=expression.name,
-                        )
-                arg_nodes = [a.expression for a in expression.args]
-                self._emit_event("before_call", self, expression.name, positional_args, env, expression.location)
-                result = self.builtins.invoke(self, expression.name, positional_args, arg_nodes, env, expression.location)
-            except ASMRuntimeError:
+                        if callee_ident in {"READFILE", "WRITEFILE"}:
+                            allowed = {"coding"}
+                            key = "coding"
+                        elif callee_ident == "BYTES":
+                            allowed = {"endian"}
+                            key = "endian"
+                        else:
+                            allowed = set()
+                            key = None
+
+                        unexpected = [k for k in keyword_args if k not in allowed]
+                        if unexpected:
+                            raise ASMRuntimeError(
+                                f"Unexpected keyword arguments: {', '.join(sorted(unexpected))}",
+                                location=expression.location,
+                                rewrite_rule=callee_ident,
+                            )
+                        if key and key in keyword_args:
+                            positional_args.append(keyword_args.pop(key))
+                        if keyword_args:
+                            raise ASMRuntimeError(
+                                f"{callee_ident} does not accept keyword arguments",
+                                location=expression.location,
+                                rewrite_rule=callee_ident,
+                            )
+                    arg_nodes = [a.expression for a in expression.args]
+                    self._emit_event("before_call", self, callee_ident, positional_args, env, expression.location)
+                    result = self.builtins.invoke(self, callee_ident, positional_args, arg_nodes, env, expression.location)
+                except ASMRuntimeError:
+                    self._log_step(
+                        rule=callee_ident,
+                        location=expression.location,
+                        extra={
+                            "args": [a.value for a in positional_args],
+                            "keyword": {k: v.value for k, v in keyword_args.items()},
+                            "status": "error",
+                        },
+                    )
+                    raise
+                self._emit_event("after_call", self, callee_ident, result, env, expression.location)
                 self._log_step(
-                    rule=expression.name,
+                    rule=callee_ident,
                     location=expression.location,
                     extra={
                         "args": [a.value for a in positional_args],
                         "keyword": {k: v.value for k, v in keyword_args.items()},
-                        "status": "error",
+                        "result": result.value,
                     },
                 )
-                raise
-            self._emit_event("after_call", self, expression.name, result, env, expression.location)
-            self._log_step(
-                rule=expression.name,
-                location=expression.location,
-                extra={
-                    "args": [a.value for a in positional_args],
-                    "keyword": {k: v.value for k, v in keyword_args.items()},
-                    "result": result.value,
-                },
-            )
-            return result
+                return result
+
+            callee_value = self._evaluate_expression(callee_expr, env)
+            func_obj = self._expect_func(callee_value, "CALL", expression.location)
+            return self._invoke_function_object(func_obj, positional_args, keyword_args, expression.location, env)
         raise ASMRuntimeError("Unsupported expression", location=expression.location)
+
+    def _invoke_function_object(
+        self,
+        func: Function,
+        positional_args: List[Value],
+        keyword_args: Dict[str, Value],
+        call_location: SourceLocation,
+        env: Environment,
+        *,
+        alias: Optional[str] = None,
+    ) -> Value:
+        label = alias or func.name
+        self._log_step(
+            rule="CALL",
+            location=call_location,
+            extra={
+                "function": label,
+                "target": func.name,
+                "positional": [a.value for a in positional_args],
+                "keyword": {k: v.value for k, v in keyword_args.items()},
+            },
+        )
+        self._emit_event("before_call", self, func.name, positional_args, env, call_location)
+        return self._call_user_function(func, positional_args, keyword_args, call_location)
 
     def _call_user_function(
         self,
@@ -3694,6 +3766,12 @@ class Interpreter:
             if function.return_type == TYPE_TNS:
                 raise ASMRuntimeError(
                     f"Function {function.name} must return a tensor value",
+                    location=call_location,
+                    rewrite_rule=function.name,
+                )
+            if function.return_type == TYPE_FUNC:
+                raise ASMRuntimeError(
+                    f"Function {function.name} must return a function value",
                     location=call_location,
                     rewrite_rule=function.name,
                 )
