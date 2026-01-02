@@ -43,14 +43,16 @@ SYMBOLS = {
     "}": "RBRACE",
     "[": "LBRACKET",
     "]": "RBRACKET",
+    "<": "LANGLE",
+    ">": "RANGLE",
     ",": "COMMA",
     "=": "EQUALS",
     ":": "COLON",
 }
 
 # Precompute identifier character sets for fast membership tests
-IDENT_START_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?"))
-IDENT_PART_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|<>?"))
+IDENT_START_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|?"))
+IDENT_PART_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|?"))
 
 
 class Lexer:

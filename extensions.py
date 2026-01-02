@@ -400,6 +400,7 @@ def build_default_services() -> RuntimeServices:
     services.type_registry.seal("FLT")
     services.type_registry.seal("STR")
     services.type_registry.seal("TNS")
+    services.type_registry.seal("MAP")
     services.type_registry.seal("FUNC")
     return services
 

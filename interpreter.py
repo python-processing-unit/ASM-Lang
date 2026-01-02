@@ -11,6 +11,7 @@ import numpy as np
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from collections import OrderedDict
 from numpy.typing import NDArray
 
 from lexer import ASMError, ASMParseError, Lexer
@@ -36,6 +37,7 @@ from parser import (
     IfBranch,
     IfStatement,
     Literal,
+    MapLiteral,
     Param,
     Parser,
     Program,
@@ -55,6 +57,7 @@ TYPE_FLT = "FLT"
 TYPE_STR = "STR"
 TYPE_TNS = "TNS"
 TYPE_FUNC = "FUNC"
+TYPE_MAP = "MAP"
 
 # On Windows, command lines over a certain length cause CreateProcess errors
 WINDOWS_COMMAND_LENGTH_LIMIT = 8000
@@ -75,6 +78,12 @@ class Tensor:
             out[i] = stride
             stride *= int(self.shape[i])
         object.__setattr__(self, "strides", tuple(out))
+
+
+@dataclass(slots=True)
+class Map:
+    # Preserve insertion order of keys (left-to-right insertion order).
+    data: OrderedDict[Tuple[str, Any], "Value"] = field(default_factory=OrderedDict)
 
 
 @dataclass(slots=True)
@@ -434,6 +443,7 @@ class Builtins:
         self._register_custom("MAIN", 0, 0, self._main)
         self._register_custom("OS", 0, 0, self._os)
         self._register_custom("IMPORT", 1, 2, self._import)
+        self._register_custom("IMPORT_PATH", 1, 1, self._import_path)
         self._register_custom("RUN", 1, 1, self._run)
         self._register_custom("INPUT", 0, 1, self._input)
         self._register_custom("PRINT", 0, None, self._print)
@@ -446,12 +456,19 @@ class Builtins:
         self._register_custom("FROZEN", 1, 1, self._frozen)
         self._register_custom("PERMAFROZEN", 1, 1, self._permafrozen)
         self._register_custom("EXIST", 1, 1, self._exist)
+        self._register_custom("KEYS", 1, 1, self._keys)
+        self._register_custom("VALUES", 1, 1, self._values)
+        self._register_custom("KEYIN", 2, 2, self._keyin)
+        self._register_custom("VALUEIN", 2, 2, self._valuein)
         self._register_custom("EXPORT", 2, 2, self._export)
         self._register_custom("ISINT", 1, 1, self._isint)
         self._register_custom("ISFLT", 1, 1, self._isflt)
         self._register_custom("ISSTR", 1, 1, self._isstr)
         self._register_custom("ISTNS", 1, 1, self._istns)
         self._register_custom("TYPE", 1, 1, self._type)
+        self._register_custom("SIGNATURE", 1, 1, self._signature)
+        self._register_custom("COPY", 1, 1, self._copy)
+        self._register_custom("DEEPCOPY", 1, 1, self._deepcopy)
         self._register_custom("ROUND", 1, 3, self._round)
         self._register_custom("READFILE", 1, 2, self._readfile)
         self._register_custom("BYTES", 1, 2, self._bytes)
@@ -476,7 +493,7 @@ class Builtins:
         self._register_custom("TMUL", 2, 2, self._tmul)
         self._register_custom("TDIV", 2, 2, self._tdiv)
         self._register_custom("TPOW", 2, 2, self._tpow)
-        self._register_custom("CONVOLVE", 2, 2, self._convolve)
+        self._register_custom("CONV", 2, 2, self._convolve)
         self._register_custom("FLIP", 1, 1, self._flip)
         self._register_custom("TFLIP", 2, 2, self._tflip)
         self._register_custom("SCATTER", 3, 3, self._scatter)
@@ -985,6 +1002,95 @@ class Builtins:
         data = np.array([Value(TYPE_STR, part) for part in parts], dtype=object)
         return Value(TYPE_TNS, Tensor(shape=[len(parts)], data=data))
 
+    def _keys(
+        self,
+        _: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # KEYS(MAP: map):TNS -> returns 1-D tensor of the map's keys in insertion order
+        val = args[0]
+        if val.type != TYPE_MAP:
+            raise ASMRuntimeError("KEYS expects a MAP argument", location=location, rewrite_rule="KEYS")
+        m = val.value
+        assert isinstance(m, Map)
+        out: List[Value] = []
+        for key_type, key_val in m.data.keys():
+            if key_type == TYPE_INT:
+                out.append(Value(TYPE_INT, key_val))
+            elif key_type == TYPE_FLT:
+                out.append(Value(TYPE_FLT, key_val))
+            elif key_type == TYPE_STR:
+                out.append(Value(TYPE_STR, key_val))
+            else:
+                raise ASMRuntimeError("Unsupported map key type", location=location, rewrite_rule="KEYS")
+        arr = np.array(out, dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[len(out)], data=arr))
+
+    def _values(
+        self,
+        _: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # VALUES(MAP: map):TNS -> returns 1-D tensor of the map's values in insertion order
+        val = args[0]
+        if val.type != TYPE_MAP:
+            raise ASMRuntimeError("VALUES expects a MAP argument", location=location, rewrite_rule="VALUES")
+        m = val.value
+        assert isinstance(m, Map)
+        out: List[Value] = [v for v in m.data.values()]
+        arr = np.array(out, dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[len(out)], data=arr))
+
+    def _keyin(
+        self,
+        _: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # KEYIN(INT|FLT|STR: key, MAP: map):INT -> 1 if the key exists in map
+        if len(args) != 2:
+            raise ASMRuntimeError("KEYIN requires two arguments", location=location, rewrite_rule="KEYIN")
+        key = args[0]
+        mval = args[1]
+        if mval.type != TYPE_MAP:
+            raise ASMRuntimeError("KEYIN expects a MAP as second argument", location=location, rewrite_rule="KEYIN")
+        if key.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+            raise ASMRuntimeError("KEYIN expects key of type INT, FLT, or STR", location=location, rewrite_rule="KEYIN")
+        m = mval.value
+        assert isinstance(m, Map)
+        exists = (key.type, key.value) in m.data
+        return Value(TYPE_INT, 1 if exists else 0)
+
+    def _valuein(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # VALUEIN(ANY: value, MAP: map):INT -> 1 if any map value equals value
+        if len(args) != 2:
+            raise ASMRuntimeError("VALUEIN requires two arguments", location=location, rewrite_rule="VALUEIN")
+        needle = args[0]
+        mval = args[1]
+        if mval.type != TYPE_MAP:
+            raise ASMRuntimeError("VALUEIN expects a MAP as second argument", location=location, rewrite_rule="VALUEIN")
+        m = mval.value
+        assert isinstance(m, Map)
+        for v in m.data.values():
+            if interpreter._values_equal(needle, v):
+                return Value(TYPE_INT, 1)
+        return Value(TYPE_INT, 0)
+
     # Boolean-like operators treating strings via emptiness
     def _and(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         a, b = args
@@ -1264,8 +1370,8 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         root = interpreter.entry_filename
-        if root == "<string>":
-            return Value(TYPE_INT, 1 if location.file == "<string>" else 0)
+        if root == "<repl>":
+            return Value(TYPE_INT, 1 if location.file == "<repl>" else 0)
         return Value(TYPE_INT, 1 if os.path.abspath(location.file) == root else 0)
 
     def _os(
@@ -1355,7 +1461,7 @@ class Builtins:
                 interpreter._mark_functions_changed()
             return Value(TYPE_INT, 0)
 
-        base_dir = os.getcwd() if location.file == "<string>" else os.path.dirname(os.path.abspath(location.file))
+        base_dir = os.getcwd() if location.file == "<repl>" else os.path.dirname(os.path.abspath(location.file))
         module_path = os.path.join(base_dir, f"{module_name}.asmln")
 
         try:
@@ -1526,6 +1632,180 @@ class Builtins:
             env.set(dotted, v, declared_type=v.type)
         return Value(TYPE_INT, 0)
 
+    def _import_path(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        arg_nodes: List[Expression],
+        env: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # IMPORT_PATH(path): import the module located at absolute filesystem path `path`.
+        path = self._expect_str(args[0], "IMPORT_PATH", location)
+        if not os.path.isabs(path):
+            raise ASMRuntimeError("IMPORT_PATH expects an absolute path", location=location, rewrite_rule="IMPORT_PATH")
+
+        module_path = os.path.abspath(path)
+        if not os.path.exists(module_path):
+            raise ASMRuntimeError(f"Module file not found: {module_path}", location=location, rewrite_rule="IMPORT_PATH")
+
+        module_name = os.path.splitext(os.path.basename(module_path))[0]
+
+        pre_function_keys = set(interpreter.functions.keys())
+
+        # If module was already imported by name, reuse cached env/functions.
+        if module_name in interpreter.module_cache:
+            cached_env = interpreter.module_cache[module_name]
+            for fn in interpreter.module_functions.get(module_name, []):
+                if fn.name not in interpreter.functions:
+                    interpreter.functions[fn.name] = fn
+
+            for k, v in cached_env.values.items():
+                dotted = f"{module_name}.{k}"
+                env.set(dotted, v, declared_type=v.type)
+
+            if set(interpreter.functions.keys()) != pre_function_keys:
+                interpreter._mark_functions_changed()
+            return Value(TYPE_INT, 0)
+
+        try:
+            with open(module_path, "r", encoding="utf-8") as handle:
+                source_text = handle.read()
+        except OSError as exc:
+            raise ASMRuntimeError(f"Failed to import path '{module_path}': {exc}", location=location, rewrite_rule="IMPORT_PATH")
+
+        # --- extension loading (same behavior as IMPORT) ---
+        try:
+            import extensions as _extmod
+
+            companion_asmxt = os.path.splitext(module_path)[0] + ".asmxt"
+            if os.path.exists(companion_asmxt):
+                try:
+                    asm_paths = _extmod.read_asmx(companion_asmxt)
+                    for p in _extmod.gather_extension_paths(asm_paths):
+                        mod = _extmod.load_extension_module(p)
+                        api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                        if api_version != _extmod.EXTENSION_API_VERSION:
+                            raise ASMExtensionError(
+                                f"Extension {p} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
+                            )
+                        register = getattr(mod, "asm_lang_register", None)
+                        if register is None or not callable(register):
+                            raise ASMExtensionError(f"Extension {p} must define callable asm_lang_register(ext)")
+                        ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(p))[0])
+                        ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                        ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
+                        before = len(interpreter.services.operators)
+                        register(ext_api)
+                        for name, min_args, max_args, impl, _doc in interpreter.services.operators[before:]:
+                            if name in interpreter.builtins.table:
+                                continue
+                            interpreter.builtins.register_extension_operator(
+                                name=name,
+                                min_args=min_args,
+                                max_args=max_args,
+                                impl=impl,
+                            )
+                except ASMExtensionError as exc:
+                    raise ASMExtensionError(f"Failed to load extensions from {companion_asmxt}: {exc}") from exc
+
+            builtin = _extmod._resolve_in_builtin_ext(f"{module_name}.py")
+            if builtin is not None and os.path.exists(builtin):
+                mod = _extmod.load_extension_module(builtin)
+                api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                if api_version != _extmod.EXTENSION_API_VERSION:
+                    raise ASMExtensionError(
+                        f"Extension {builtin} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
+                    )
+                register = getattr(mod, "asm_lang_register", None)
+                if register is not None and callable(register):
+                    ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(builtin))[0])
+                    ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                    ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
+                    before = len(interpreter.services.operators)
+                    register(ext_api)
+                    for name, min_args, max_args, impl, _doc in interpreter.services.operators[before:]:
+                        if name in interpreter.builtins.table:
+                            continue
+                        interpreter.builtins.register_extension_operator(
+                            name=name,
+                            min_args=min_args,
+                            max_args=max_args,
+                            impl=impl,
+                        )
+        except ASMExtensionError as exc:
+            raise ASMRuntimeError(str(exc), location=location, rewrite_rule="IMPORT_PATH")
+        except Exception:
+            pass
+
+        lexer = Lexer(source_text, module_path)
+        tokens = lexer.tokenize()
+        source_lines = source_text.splitlines()
+        parser = Parser(tokens, module_path, source_lines, type_names=interpreter.type_registry.names())
+        program = parser.parse()
+
+        module_env = Environment()
+        prev_functions = dict(interpreter.functions)
+        try:
+            interpreter._execute_block(program.statements, module_env)
+        except Exception as exc:
+            interpreter.functions = prev_functions
+            if isinstance(exc, ASMRuntimeError):
+                raise
+            raise ASMRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT_PATH")
+
+        new_funcs = {n: f for n, f in interpreter.functions.items() if n not in prev_functions}
+        registered_functions: List[Function] = []
+        for name, fn in new_funcs.items():
+            dotted_name = f"{module_name}.{name}"
+            if "." in name:
+                created = Function(
+                    name=dotted_name,
+                    params=fn.params,
+                    return_type=fn.return_type,
+                    body=fn.body,
+                    closure=fn.closure,
+                )
+                interpreter.functions[dotted_name] = created
+                registered_functions.append(created)
+            else:
+                interpreter.functions.pop(name, None)
+                created = Function(
+                    name=dotted_name,
+                    params=fn.params,
+                    return_type=fn.return_type,
+                    body=fn.body,
+                    closure=module_env,
+                )
+                interpreter.functions[dotted_name] = created
+                registered_functions.append(created)
+
+        for fn in registered_functions:
+            parts = fn.name.split(".", 1)
+            if len(parts) == 2:
+                _, unqualified = parts
+                alias_name = f"{module_name}.{unqualified}"
+                if alias_name not in interpreter.functions:
+                    alias_fn = Function(
+                        name=alias_name,
+                        params=fn.params,
+                        return_type=fn.return_type,
+                        body=fn.body,
+                        closure=module_env,
+                    )
+                    interpreter.functions[alias_name] = alias_fn
+
+        interpreter.module_cache[module_name] = module_env
+        interpreter.module_functions[module_name] = registered_functions
+
+        if set(interpreter.functions.keys()) != pre_function_keys:
+            interpreter._mark_functions_changed()
+
+        for k, v in module_env.values.items():
+            dotted = f"{module_name}.{k}"
+            env.set(dotted, v, declared_type=v.type)
+        return Value(TYPE_INT, 0)
+
     def _run(
         self,
         interpreter: "Interpreter",
@@ -1683,15 +1963,54 @@ class Builtins:
         env: Environment,
         location: SourceLocation,
     ) -> Value:
-        if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("DEL expects identifier", location=location, rewrite_rule="DEL")
-        name = arg_nodes[0].name
-        try:
-            env.delete(name)
-        except ASMRuntimeError as err:
-            err.location = location
-            raise
-        return Value(TYPE_INT, 0)
+        if not arg_nodes:
+            raise ASMRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
+        first = arg_nodes[0]
+        # Deleting a top-level identifier
+        if isinstance(first, Identifier):
+            name = first.name
+            try:
+                env.delete(name)
+            except ASMRuntimeError as err:
+                err.location = location
+                raise
+            return Value(TYPE_INT, 0)
+
+        # Deleting a map key via indexed expression, e.g. DEL(map<k>)
+        if isinstance(first, IndexExpression):
+            base_expr, index_nodes = interpreter._gather_index_chain(first)
+            if not isinstance(base_expr, Identifier):
+                raise ASMRuntimeError("DEL expects identifier base for indexed deletion", location=location, rewrite_rule="DEL")
+            base_val = interpreter._evaluate_expression(base_expr, env)
+            if base_val.type != TYPE_MAP:
+                raise ASMRuntimeError("DEL indexed deletion requires a map base", location=location, rewrite_rule="DEL")
+            assert isinstance(base_val.value, Map)
+            eval_expr = interpreter._evaluate_expression
+            current_map = base_val.value
+            # Traverse to parent of final key
+            for node in index_nodes[:-1]:
+                key_val = eval_expr(node, env)
+                if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                    raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
+                key = (key_val.type, key_val.value)
+                if key not in current_map.data:
+                    raise ASMRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="DEL")
+                next_val = current_map.data[key]
+                if next_val.type != TYPE_MAP:
+                    raise ASMRuntimeError("Cannot traverse non-map value during DEL", location=location, rewrite_rule="DEL")
+                current_map = next_val.value
+            # Final key
+            final_node = index_nodes[-1]
+            final_key_val = eval_expr(final_node, env)
+            if final_key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
+            final_key = (final_key_val.type, final_key_val.value)
+            if final_key not in current_map.data:
+                raise ASMRuntimeError(f"Key not found: {final_key_val.value}", location=location, rewrite_rule="DEL")
+            del current_map.data[final_key]
+            return Value(TYPE_INT, 0)
+
+        raise ASMRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
 
     def _freeze(
         self,
@@ -1878,6 +2197,145 @@ class Builtins:
         val = args[0]
         # Return the type string as STR; preserve extension type names if present
         return Value(TYPE_STR, val.type)
+
+    def _signature(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        arg_nodes: List[Expression],
+        env: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # SIGNATURE(SYMBOL: sym):STR -> return a textual signature for sym
+        if len(args) != 1:
+            raise ASMRuntimeError("SIGNATURE expects one argument", location=location, rewrite_rule="SIGNATURE")
+        if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
+            raise ASMRuntimeError("SIGNATURE requires an identifier argument", location=location, rewrite_rule="SIGNATURE")
+        name = arg_nodes[0].name
+
+        # First prefer an environment binding
+        try:
+            if env.has(name):
+                val = env.get(name)
+                if val.type == TYPE_FUNC:
+                    func = val.value
+                else:
+                    return Value(TYPE_STR, f"{val.type}: {name}")
+            elif name in interpreter.functions:
+                func = interpreter.functions[name]
+            else:
+                raise ASMRuntimeError(f"Unknown identifier '{name}'", location=location, rewrite_rule="SIGNATURE")
+        except ASMRuntimeError:
+            raise
+        except Exception as exc:
+            raise ASMRuntimeError(str(exc), location=location, rewrite_rule="SIGNATURE")
+
+        # Build function signature in the documented form:
+        # FUNC name(T1:arg1, T2:arg2 = def, ...):R
+        parts: List[str] = []
+        for p in func.params:
+            part = f"{p.type}: {p.name}"
+            if p.default is not None:
+                # Try to render simple literal defaults
+                d = p.default
+                rendered = "<expr>"
+                try:
+                    if isinstance(d, Literal):
+                        if d.literal_type == "INT":
+                            ival = int(d.value)
+                            if ival < 0:
+                                rendered = "-" + bin(abs(ival))[2:]
+                            else:
+                                rendered = bin(ival)[2:]
+                        elif d.literal_type == "STR":
+                            rendered = '"' + str(d.value) + '"'
+                        else:
+                            rendered = repr(d.value)
+                    else:
+                        # best-effort: use source snippet if available
+                        loc = getattr(d, "location", None)
+                        if loc is not None and getattr(loc, "statement", ""):
+                            stmt = loc.statement
+                            col = max(1, getattr(loc, "column", 1))
+                            # columns are 1-based; slice defensively
+                            try:
+                                rendered = stmt[col - 1 :].strip()
+                            except Exception:
+                                rendered = stmt
+                except Exception:
+                    rendered = "<expr>"
+                part += " = " + rendered
+            parts.append(part)
+
+        params_text = ", ".join(parts)
+        sig = f"FUNC {func.name}({params_text}):{func.return_type}"
+        return Value(TYPE_STR, sig)
+
+    def _copy(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # COPY(ANY: obj):ANY -> shallow copy of obj. For primitives this
+        # returns a same-typed Value wrapper; for TNS/MAP it returns a new
+        # container with element references preserved.
+        if len(args) != 1:
+            raise ASMRuntimeError("COPY expects one argument", location=location, rewrite_rule="COPY")
+        val = args[0]
+        if val.type in (TYPE_INT, TYPE_FLT, TYPE_STR, TYPE_FUNC):
+            return Value(val.type, val.value)
+        if val.type == TYPE_TNS:
+            tensor = self._expect_tns(val, "COPY", location)
+            flat = tensor.data.ravel()
+            n = flat.size
+            out = np.empty(n, dtype=object)
+            for i in range(n):
+                out[i] = flat[i]
+            return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
+        if val.type == TYPE_MAP:
+            m = val.value
+            assert isinstance(m, Map)
+            new_map = Map()
+            for k, v in m.data.items():
+                new_map.data[k] = v
+            return Value(TYPE_MAP, new_map)
+        raise ASMRuntimeError("COPY: unsupported value type", location=location, rewrite_rule="COPY")
+
+    def _deep_copy_value(self, interpreter: "Interpreter", val: Value, location: SourceLocation) -> Value:
+        # Helper for recursive deep-copy of Value objects
+        if val.type in (TYPE_INT, TYPE_FLT, TYPE_STR, TYPE_FUNC):
+            return Value(val.type, val.value)
+        if val.type == TYPE_TNS:
+            tensor = self._expect_tns(val, "DEEPCOPY", location)
+            flat = tensor.data.ravel()
+            new_list: List[Value] = [self._deep_copy_value(interpreter, item, location) for item in flat]
+            arr = np.array(new_list, dtype=object)
+            return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=arr))
+        if val.type == TYPE_MAP:
+            m = val.value
+            assert isinstance(m, Map)
+            new_map = Map()
+            for k, v in m.data.items():
+                new_map.data[k] = self._deep_copy_value(interpreter, v, location)
+            return Value(TYPE_MAP, new_map)
+        raise ASMRuntimeError("DEEPCOPY: unsupported value type", location=location, rewrite_rule="DEEPCOPY")
+
+    def _deepcopy(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # DEEPCOPY(ANY: obj):ANY -> recursively copy containers so elements
+        # are freshly-copied as well.
+        if len(args) != 1:
+            raise ASMRuntimeError("DEEPCOPY expects one argument", location=location, rewrite_rule="DEEPCOPY")
+        return self._deep_copy_value(interpreter, args[0], location)
 
     def _frozen(
         self,
@@ -2565,7 +3023,7 @@ class Builtins:
         ___: Environment,
         location: SourceLocation,
     ) -> Value:
-        """CONVOLVE(TNS: x, TNS: kernel):TNS
+        """CONV(TNS: x, TNS: kernel):TNS
 
         N-dimensional discrete convolution with clamped (replicate) boundary.
 
@@ -2578,41 +3036,41 @@ class Builtins:
         The output shape equals the input `x` shape.
         """
 
-        x = self._expect_tns(args[0], "CONVOLVE", location)
-        kernel = self._expect_tns(args[1], "CONVOLVE", location)
+        x = self._expect_tns(args[0], "CONV", location)
+        kernel = self._expect_tns(args[1], "CONV", location)
 
         if len(x.shape) != len(kernel.shape):
             raise ASMRuntimeError(
-                "CONVOLVE requires input and kernel tensors with the same rank",
+                "CONV requires input and kernel tensors with the same rank",
                 location=location,
-                rewrite_rule="CONVOLVE",
+                rewrite_rule="CONV",
             )
         if any((d % 2) == 0 for d in kernel.shape):
             raise ASMRuntimeError(
-                "CONVOLVE requires odd kernel dimensions",
+                "CONV requires odd kernel dimensions",
                 location=location,
-                rewrite_rule="CONVOLVE",
+                rewrite_rule="CONV",
             )
 
         def _uniform_numeric_type(t: Tensor, which: str) -> str:
             if t.data.size == 0:
                 raise ASMRuntimeError(
-                    f"CONVOLVE does not support empty {which} tensors",
+                    f"CONV does not support empty {which} tensors",
                     location=location,
-                    rewrite_rule="CONVOLVE",
+                    rewrite_rule="CONV",
                 )
             first = next(iter(t.data.flat)).type
             if first not in (TYPE_INT, TYPE_FLT):
                 raise ASMRuntimeError(
-                    "CONVOLVE expects INT or FLT tensor elements",
+                    "CONV expects INT or FLT tensor elements",
                     location=location,
-                    rewrite_rule="CONVOLVE",
+                    rewrite_rule="CONV",
                 )
             if any(v.type != first for v in t.data.flat):
                 raise ASMRuntimeError(
-                    "CONVOLVE does not allow mixed element types within a tensor",
+                    "CONV does not allow mixed element types within a tensor",
                     location=location,
-                    rewrite_rule="CONVOLVE",
+                    rewrite_rule="CONV",
                 )
             return first
 
@@ -2840,7 +3298,7 @@ class Interpreter:
     ) -> None:
         self.source = source
         self._source_lines = source.splitlines()
-        normalized_filename = filename if filename == "<string>" else os.path.abspath(filename)
+        normalized_filename = filename if filename == "<repl>" else os.path.abspath(filename)
         self.filename = normalized_filename
         self.entry_filename = normalized_filename
         self.verbose = verbose
@@ -2916,6 +3374,17 @@ class Interpreter:
                     condition_int=lambda ctx, v: 1 if ctx.interpreter._tensor_truthy(v.value) else 0,
                     to_str=lambda ctx, v: "<tensor>",
                     equals=lambda ctx, a, b: ctx.interpreter._tensor_equal(a.value, b.value),
+                ),
+                seal=True,
+            )
+
+        if not self.type_registry.has(TYPE_MAP):
+            self.type_registry.register(
+                TypeSpec(
+                    name=TYPE_MAP,
+                    printable=True,
+                    condition_int=lambda ctx, v: 1 if getattr(v.value, "data", {}) else 0,
+                    to_str=lambda ctx, v: "<map>",
                 ),
                 seal=True,
             )
@@ -3134,9 +3603,46 @@ class Interpreter:
                 )
 
             base_val = self._evaluate_expression(base_expr, env)
+            # MAP assignment path: support multi-key assignment like m<k1,k2> = v
+            if base_val.type == TYPE_MAP:
+                assert isinstance(base_val.value, Map)
+                eval_expr = self._evaluate_expression
+                # Traverse/create nested maps for all but the final key
+                current_map_val = base_val
+                for idx_node in index_nodes[:-1]:
+                    key_val = eval_expr(idx_node, env)
+                    if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                        raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=statement.location, rewrite_rule="ASSIGN")
+                    key = (key_val.type, key_val.value)
+                    # If key absent, create nested map
+                    if key not in current_map_val.value.data:
+                        new_map = Map()
+                        current_map_val.value.data[key] = Value(TYPE_MAP, new_map)
+                    next_val = current_map_val.value.data[key]
+                    if next_val.type != TYPE_MAP:
+                        raise ASMRuntimeError("Cannot index into non-map value", location=statement.location, rewrite_rule="ASSIGN")
+                    current_map_val = next_val
+                # Final key
+                final_key_node = index_nodes[-1]
+                final_key_val = eval_expr(final_key_node, env)
+                if final_key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                    raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=statement.location, rewrite_rule="ASSIGN")
+                final_key = (final_key_val.type, final_key_val.value)
+                new_value = self._evaluate_expression(statement.value, env)
+                existing = current_map_val.value.data.get(final_key)
+                if existing is not None and existing.type != new_value.type:
+                    raise ASMRuntimeError(
+                        f"Type mismatch for map key assignment: existing {existing.type} vs new {new_value.type}",
+                        location=statement.location,
+                        rewrite_rule="ASSIGN",
+                    )
+                current_map_val.value.data[final_key] = new_value
+                return
+
+            # Tensor assignment path (existing semantics)
             if base_val.type != TYPE_TNS:
                 raise ASMRuntimeError(
-                    "Indexed assignment requires a tensor base",
+                    "Indexed assignment requires a tensor or map base",
                     location=statement.location,
                     rewrite_rule="ASSIGN",
                 )
@@ -3718,57 +4224,86 @@ class Interpreter:
         if isinstance(expression, TensorLiteral):
             tensor = self._build_tensor_from_literal(expression, env)
             return Value(TYPE_TNS, tensor)
+        if isinstance(expression, MapLiteral):
+            m = Map()
+            for key_node, val_node in expression.items:
+                key_val = self._evaluate_expression(key_node, env)
+                if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                    raise ASMRuntimeError("Map literal keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="MAP")
+                key = (key_val.type, key_val.value)
+                val = self._evaluate_expression(val_node, env)
+                m.data[key] = val
+            return Value(TYPE_MAP, m)
         if isinstance(expression, IndexExpression):
             base_expr, index_nodes = self._gather_index_chain(expression)
             base_val = self._evaluate_expression(base_expr, env)
-            if base_val.type != TYPE_TNS:
-                raise ASMRuntimeError("Indexed access requires a tensor", location=expression.location, rewrite_rule="INDEX")
-            assert isinstance(base_val.value, Tensor)
-            eval_expr = self._evaluate_expression
-            expect_int = self._expect_int
-            # Determine if any index is a range (slice) or star. If none,
-            # behave as before and return a single element. If any ranges
-            # or stars present, construct numpy slicing indices and return
-            # a Tensor.
-            has_range = any(isinstance(n, (Range, Star)) for n in index_nodes)
-            if not has_range:
-                indices: List[int] = []
-                indices_append = indices.append
-                for idx_node in index_nodes:
-                    indices_append(expect_int(eval_expr(idx_node, env), "INDEX", expression.location))
-                offset = self._tensor_flat_index(base_val.value, indices, "INDEX", expression.location)
-                return base_val.value.data[offset]
+            # Tensor indexing path (existing semantics)
+            if base_val.type == TYPE_TNS:
+                assert isinstance(base_val.value, Tensor)
+                eval_expr = self._evaluate_expression
+                expect_int = self._expect_int
+                # Determine if any index is a range (slice) or star. If none,
+                # behave as before and return a single element. If any ranges
+                # or stars present, construct numpy slicing indices and return
+                # a Tensor.
+                has_range = any(isinstance(n, (Range, Star)) for n in index_nodes)
+                if not has_range:
+                    indices: List[int] = []
+                    indices_append = indices.append
+                    for idx_node in index_nodes:
+                        indices_append(expect_int(eval_expr(idx_node, env), "INDEX", expression.location))
+                    offset = self._tensor_flat_index(base_val.value, indices, "INDEX", expression.location)
+                    return base_val.value.data[offset]
 
-            # Build numpy indexers (mix of ints and slices). Resolve 1-based
-            # indices into 0-based python indices; ranges are inclusive.
-            arr = base_val.value.data.reshape(tuple(base_val.value.shape))
-            indexers: List[object] = []
-            for dim, node in enumerate(index_nodes):
-                if isinstance(node, Range):
-                    lo_val = expect_int(eval_expr(node.lo, env), "INDEX", expression.location)
-                    hi_val = expect_int(eval_expr(node.hi, env), "INDEX", expression.location)
-                    # validate both endpoints
-                    lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "INDEX", expression.location)
-                    hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "INDEX", expression.location)
-                    # convert to 0-based slice: start = lo_res-1, stop = hi_res (exclusive)
-                    indexers.append(slice(lo_res - 1, hi_res))
-                elif type(node).__name__ == "Star":
-                    # Full-dimension slice `*` selects the entire axis
-                    indexers.append(slice(None, None))
-                else:
-                    raw = expect_int(eval_expr(node, env), "INDEX", expression.location)
-                    idx_res = self._resolve_tensor_index(raw, base_val.value.shape[dim], "INDEX", expression.location)
-                    indexers.append(idx_res - 1)
+                # Build numpy indexers (mix of ints and slices). Resolve 1-based
+                # indices into 0-based python indices; ranges are inclusive.
+                arr = base_val.value.data.reshape(tuple(base_val.value.shape))
+                indexers: List[object] = []
+                for dim, node in enumerate(index_nodes):
+                    if isinstance(node, Range):
+                        lo_val = expect_int(eval_expr(node.lo, env), "INDEX", expression.location)
+                        hi_val = expect_int(eval_expr(node.hi, env), "INDEX", expression.location)
+                        # validate both endpoints
+                        lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "INDEX", expression.location)
+                        hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "INDEX", expression.location)
+                        # convert to 0-based slice: start = lo_res-1, stop = hi_res (exclusive)
+                        indexers.append(slice(lo_res - 1, hi_res))
+                    elif type(node).__name__ == "Star":
+                        # Full-dimension slice `*` selects the entire axis
+                        indexers.append(slice(None, None))
+                    else:
+                        raw = expect_int(eval_expr(node, env), "INDEX", expression.location)
+                        idx_res = self._resolve_tensor_index(raw, base_val.value.shape[dim], "INDEX", expression.location)
+                        indexers.append(idx_res - 1)
 
-            sel = arr[tuple(indexers)]
-            sel_arr = sel if isinstance(sel, np.ndarray) else np.array(sel, dtype=object)
-            # Ensure sel_arr is at least 1-D (slices guarantee at least one dim)
-            if sel_arr.ndim == 0:
-                # Single element selected despite slice usage; wrap as 1-element tensor
-                sel_arr = sel_arr.reshape((1,))
-            out_shape = list(sel_arr.shape)
-            out_data = sel_arr.ravel()
-            return Value(TYPE_TNS, Tensor(shape=out_shape, data=out_data))
+                sel = arr[tuple(indexers)]
+                sel_arr = sel if isinstance(sel, np.ndarray) else np.array(sel, dtype=object)
+                # Ensure sel_arr is at least 1-D (slices guarantee at least one dim)
+                if sel_arr.ndim == 0:
+                    # Single element selected despite slice usage; wrap as 1-element tensor
+                    sel_arr = sel_arr.reshape((1,))
+                out_shape = list(sel_arr.shape)
+                out_data = sel_arr.ravel()
+                return Value(TYPE_TNS, Tensor(shape=out_shape, data=out_data))
+
+            # Map indexing path: support multi-key lookup like m<k1,k2>
+            if base_val.type == TYPE_MAP:
+                assert isinstance(base_val.value, Map)
+                eval_expr = self._evaluate_expression
+                current = base_val
+                for node in index_nodes:
+                    key_val = eval_expr(node, env)
+                    if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                        raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="INDEX")
+                    key = (key_val.type, key_val.value)
+                    if not isinstance(current.value, Map):
+                        raise ASMRuntimeError("Attempted map-indexing into non-map value", location=expression.location, rewrite_rule="INDEX")
+                    if key not in current.value.data:
+                        raise ASMRuntimeError(f"Key not found: {key_val.value}", location=expression.location, rewrite_rule="INDEX")
+                    current = current.value.data[key]
+                return current
+
+            raise ASMRuntimeError("Indexed access requires a tensor or map", location=expression.location, rewrite_rule="INDEX")
         if isinstance(expression, Identifier):
             found = env.get_optional(expression.name)
             if found is not None:

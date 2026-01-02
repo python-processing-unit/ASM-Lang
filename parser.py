@@ -140,6 +140,11 @@ class TensorLiteral(Expression):
 
 
 @dataclass
+class MapLiteral(Expression):
+    items: List[Tuple["Expression", "Expression"]]
+
+
+@dataclass
 class IndexExpression(Expression):
     base: Expression
     indices: List[Expression]
@@ -198,7 +203,7 @@ class Parser:
         self.tokens = tokens
         self.filename = filename
         self.source_lines = source_lines
-        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS", "FUNC"}
+        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS", "FUNC", "MAP"}
         self.index = 0
 
     def _parse_flt_literal(self, raw: str, *, token: Token) -> float:
@@ -410,7 +415,7 @@ class Parser:
         expr = self._parse_primary()
         while True:
             tok_type = self._peek().type
-            if tok_type == "LBRACKET":
+            if tok_type == "LBRACKET" or tok_type == "LANGLE":
                 expr = self._parse_index_suffix(expr)
                 continue
             if tok_type == "LPAREN":
@@ -440,6 +445,8 @@ class Parser:
             return Literal(location=self._location_from_token(string_token), value=string_token.value, literal_type="STR")
         if token.type == "LBRACKET":
             return self._parse_tensor_literal()
+        if token.type == "LANGLE":
+            return self._parse_map_literal()
         if token.type == "IDENT":
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
@@ -452,9 +459,15 @@ class Parser:
         raise ASMParseError(f"Unexpected token {token.type} in expression at line {token.line}")
 
     def _parse_index_suffix(self, base: Expression) -> IndexExpression:
-        lbracket = self._consume("LBRACKET")
+        start_tok = self._peek()
+        if start_tok.type == "LBRACKET":
+            lbracket = self._consume("LBRACKET")
+            closing = "RBRACKET"
+        else:
+            lbracket = self._consume("LANGLE")
+            closing = "RANGLE"
         indices: List[Expression] = []
-        if self._peek().type != "RBRACKET":
+        if self._peek().type != closing:
             while True:
                 # Support star `*` (full-dimension slice), and slice
                 # syntax lo - hi inside index brackets. The lexer emits a
@@ -472,15 +485,15 @@ class Parser:
                         indices.append(first)
                 if not self._match("COMMA"):
                     break
-        self._consume("RBRACKET")
+        self._consume(closing)
         return IndexExpression(location=self._location_from_token(lbracket), base=base, indices=indices)
 
     def _parse_index_expression(self) -> IndexExpression:
         expr = self._parse_primary()
-        if self._peek().type != "LBRACKET":
-            raise ASMParseError(f"Expected '[' in indexed assignment at line {self._peek().line}")
+        if self._peek().type not in ("LBRACKET", "LANGLE"):
+            raise ASMParseError(f"Expected '[' or '<' in indexed assignment at line {self._peek().line}")
         expr = self._parse_index_suffix(expr)
-        while self._peek().type == "LBRACKET":
+        while self._peek().type in ("LBRACKET", "LANGLE"):
             expr = self._parse_index_suffix(expr)
         if not isinstance(expr, IndexExpression):
             raise ASMParseError(f"Invalid indexed assignment at line {self._peek().line}")
@@ -519,6 +532,20 @@ class Parser:
         self._consume("RBRACKET")
         return TensorLiteral(location=self._location_from_token(lbracket), items=items)
 
+    def _parse_map_literal(self) -> MapLiteral:
+        langle = self._consume("LANGLE")
+        items: List[Tuple[Expression, Expression]] = []
+        if self._peek().type != "RANGLE":
+            while True:
+                key_expr = self._parse_expression()
+                self._consume("EQUALS")
+                val_expr = self._parse_expression()
+                items.append((key_expr, val_expr))
+                if not self._match("COMMA"):
+                    break
+        self._consume("RANGLE")
+        return MapLiteral(location=self._location_from_token(langle), items=items)
+
     def _parse_parenthesized_expression(self) -> Expression:
         self._consume("LPAREN")
         expr = self._parse_expression()
@@ -531,16 +558,16 @@ class Parser:
         if i >= len(tokens) or tokens[i].type != "IDENT":
             return False
         i += 1
-        if i >= len(tokens) or tokens[i].type != "LBRACKET":
+        if i >= len(tokens) or tokens[i].type not in ("LBRACKET", "LANGLE"):
             return False
 
         # Walk balanced brackets to find the end of the indexed target.
         depth = 0
         while i < len(tokens):
             tok = tokens[i]
-            if tok.type == "LBRACKET":
+            if tok.type in ("LBRACKET", "LANGLE"):
                 depth += 1
-            elif tok.type == "RBRACKET":
+            elif tok.type in ("RBRACKET", "RANGLE"):
                 depth -= 1
                 if depth == 0:
                     i += 1
@@ -555,9 +582,9 @@ class Parser:
             i += 1
             while i < len(tokens):
                 tok = tokens[i]
-                if tok.type == "LBRACKET":
+                if tok.type in ("LBRACKET", "LANGLE"):
                     depth += 1
-                elif tok.type == "RBRACKET":
+                elif tok.type in ("RBRACKET", "RANGLE"):
                     depth -= 1
                     if depth == 0:
                         i += 1

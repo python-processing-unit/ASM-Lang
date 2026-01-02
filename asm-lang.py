@@ -56,7 +56,7 @@ def _parse_statements_from_source(text: str, filename: str, *, type_names: Optio
 
 def run_repl(*, verbose: bool, services) -> int:
     print("\x1b[38;2;153;221;255mASM-Lang\033[0m REPL. Enter statements, blank line to run buffer.") # "ASM-Lang" in light blue
-    # Use "<string>" as the REPL's effective source filename so that MAIN() and imports behave
+    # Use "<repl>" as the REPL's effective source filename so that MAIN() and imports behave
     had_output = False
     def _output_sink(text: str) -> None:
         nonlocal had_output
@@ -89,7 +89,7 @@ def run_repl(*, verbose: bool, services) -> int:
     try:
         interpreter = Interpreter(
             source="",
-            filename="<string>",
+            filename="<repl>",
             verbose=verbose,
             services=services,
             input_provider=(lambda: input()),
@@ -130,7 +130,7 @@ def run_repl(*, verbose: bool, services) -> int:
 
         if not buffer and stripped != "" and not is_block_start:
             try:
-                statements = _parse_statements_from_source(line, "<string>", type_names=interpreter.type_registry.names())
+                statements = _parse_statements_from_source(line, "<repl>", type_names=interpreter.type_registry.names())
                 try:
                     interpreter._execute_block(statements, global_env)
                 except ExitSignal as sig:
@@ -152,7 +152,7 @@ def run_repl(*, verbose: bool, services) -> int:
             source_text = "\n".join(buffer)
             buffer.clear()
             try:
-                statements = _parse_statements_from_source(source_text, "<string>", type_names=interpreter.type_registry.names())
+                statements = _parse_statements_from_source(source_text, "<repl>", type_names=interpreter.type_registry.names())
                 interpreter._execute_block(statements, global_env)
             except ExitSignal as sig:
                 return sig.code
@@ -249,7 +249,7 @@ def run_cli(argv: Optional[List[str]] = None) -> int:
 
     if args.source_mode:
         source_text = program
-        filename = "<string>"
+        filename = "<repl>"
     else:
         filename = program
         try:

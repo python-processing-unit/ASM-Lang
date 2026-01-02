@@ -78,7 +78,7 @@ Identifier character set (clarification): The (non-empty) sequence of characters
   - Uppercase letters `A`-`Z`
   - Decimal digits `2`-`9`
   - The punctuation and symbol characters
-    `/ ! @ $ % & ~ _ + | < > ?`
+    `/ ! @ $ % & ~ _ + | ?`
 
 - Subsequent characters in an identifier may be any of the following:
 
@@ -86,7 +86,7 @@ Identifier character set (clarification): The (non-empty) sequence of characters
   - Uppercase letters `A`-`Z`
   - Decimal digits `0`-`9`
   - The punctuation and symbol characters
-    `/ ! @ $ % & ~ _ + | < > ?`
+    `/ ! @ $ % & ~ _ + | ?`
 
   As noted above, non-ASCII characters remain disallowed, and the delimiter characters `{`, `}`, `(`, `)`, `=`, `,`, and `#` are never permitted inside identifiers.
 
@@ -117,7 +117,25 @@ Tensor literal: a non-empty bracketed collection of expressions. Each pair of ma
 
 Expressions inside a tensor literal may themselves evaluate to `INT`, `FLT`, `STR`, or `TNS`. If an element expression evaluates to a tensor value, it occupies a single position and does not contribute additional dimensions; only the explicit bracket structure determines the shape. A tensor literal that mixes sub-brackets of differing lengths is invalid (for example, `[[0,0,0],[1,1]]`).
 
-Tensor values carry a fixed shape (dimension count and length per dimension). Each location in a tensor is statically typed by the value it first receives; attempting to write a different type to that location is a runtime error. Tensors are indexed with one-based indices. Negative indices are allowed and count backward from the end of the dimension: index `-k` resolves to position `len - k + 1` (so `-1` is the last element, and `-10`—binary `-2`—is the second-to-last). Index `0` is invalid. Any index whose absolute value exceeds the length of the dimension is out of range, even if negative. Tensors may be re-assigned in two ways: binding a new tensor to the variable name, or writing through an index such as `tensor[dim1,...,dimN] = expr`. The latter mutates the existing tensor value in place at the indexed location and does not construct a new tensor object.
+
+Map literal and `MAP` type: In addition to tensors, ASM-Lang provides an N-dimensional associative map type `MAP` whose literal form uses angle brackets and key/value pairs. A map literal is written as `<key1 = value1, key2 = value2, ...>`. Values may themselves be maps, allowing nested associative structures. Examples:
+
+- `<"foo" = 1, "bar" = 10>` is a 1-level map with string keys.
+- `<"outer" = <"inner" = 1>, "other" = 0>` nests a map value under key `"outer"`.
+
+Map indexing uses angle brackets and a comma-separated key list: `m<k1>` or `m<k1,k2>` to lookup nested values. Keys must be scalar values of type `INT`, `FLT`, or `STR` (tensor values are not permitted as keys). The number of keys supplied may vary between lookups and different keys need not share the same depth: maps are sparse and do not require rectangular shapes.
+
+Maps preserve insertion order: keys are stored in the order they are inserted (left-to-right for keys written in a literal and in the order of creation for keys added later). Iteration and serialized representations of a map reflect this insertion order.
+
+Assignment to a map element uses the same indexed-assignment form as tensors: `map<k1,k2> = expr` binds or updates the nested key. Intermediate nested maps are created on-demand when assigning deeper keys. Each map entry stores its value with a single static type: assigning a different type to an existing key is a runtime error. Keys may be added or removed after the map is created. To delete a key, use the built-in deletion operator: `DEL(map<k>)` removes the mapping for `k`. Examples (REPL):
+
+```
+>>> MAP: map = <"foo" = 1, "bar" = 10, "boz" = <"foo" = 11, "bar" = 100>>
+>>> PRINT(map<"foo">)
+1
+>>> PRINT(map<"boz", "foo">)
+11
+```
 
 Slice indexing: any index position inside `[...]` may be a range of the form `lo-hi` where `lo` and `hi` are ordinary index expressions. A range selects the contiguous inclusive span of positions from `lo` to `hi` (both endpoints follow the same one-based and negative-index rules described above). Slices may be mixed with hard indices (for example, `tensor[lo-hi, i]`) and reduce the dimensionality of the selected result according to which positions are fixed versus sliced: selecting one or more ranges produces a `TNS` value whose shape equals the lengths of the specified ranges (in the same order). Assigning to a slice is supported: the left-hand side may use ranges in its indices, and the right-hand-side expression must evaluate to a `TNS` whose shape exactly matches the selected slice. Elementwise type compatibility is required: each element being written must match the static element type of the target position, otherwise a runtime error is raised. Example: `tensor[10-11] = [1,11]` writes a two-element tensor into the slice consisting of positions `10` and `11`.
 
@@ -170,7 +188,7 @@ CONTINUE statement: The language provides a statement form `CONTINUE()` that, wh
 
 ## 5. Functions
 
-Functions are defined using the `FUNC` keyword with explicit parameter and return types. The canonical positional-only form is `FUNC name(T1:arg1, T2:arg2, ..., TN:argN):R{ block }`, where each `Tk` and `R` is `INT`, `FLT`, `STR`, `TNS`, or `FUNC`. Parameters may also declare a call-time default value using `Tk:arg=expr`. A parameter without a default is positional; a parameter with a default is keyword-capable. Positional parameters must appear before any parameters with defaults. Defining a function binds `name` to a callable body with the specified typed formal parameters. Function names must not conflict with the names of built-in operators or functions.
+Functions are defined using the `FUNC` keyword with explicit parameter and return types. The canonical positional-only form is `FUNC name(T1: arg1, T2: arg2, ..., TN: argN):R{ block }`, where each `Tk` and `R` is `INT`, `FLT`, `STR`, `TNS`, or `FUNC`. Parameters may also declare a call-time default value using `Tk: arg = expr`. A parameter without a default is positional; a parameter with a default is keyword-capable. Positional parameters must appear before any parameters with defaults. Defining a function binds `name` to a callable body with the specified typed formal parameters. Function names must not conflict with the names of built-in operators or functions.
 
 A user-defined function is called with the same syntax as a built-in: `callee(expr1, expr2, ..., exprN)`. The callee may be any expression that evaluates to `FUNC`, including identifiers, tensor elements, or intermediate expressions. Calls may supply zero or more positional arguments (left-to-right) followed by zero or more keyword arguments of the form `param=expr`. Keyword arguments can only appear after all positional arguments. At the call site, every positional argument is bound to the next positional parameter; keyword arguments must match the name of a parameter that declared a default value. Duplicate keyword names, supplying too many positional arguments, or providing a keyword for an unknown parameter are runtime errors. If a keyword-capable parameter is omitted from the call, its default expression is evaluated at call time in the function's lexical environment after earlier parameters have been bound. The evaluated default must match the parameter's declared type. Built-in functions do not accept keyword arguments except that `READFILE` and `WRITEFILE` allow a single optional `coding=` keyword; attempting to pass any other keyword raises a runtime error. Arguments are evaluated left-to-right. The function body executes in a new environment (activation record) that closes over the defining environment. If a `RETURN(v)` statement is executed, the function terminates immediately and yields `v`; the returned value must match the declared return type. If control reaches the end of the body without `RETURN`, the function returns a default value of the declared return type (0 for `INT`, 0.0 for `FLT`, "" for `STR`). Functions whose return type is
 `TNS` or `FUNC` must execute an explicit `RETURN` of the declared type; reaching the end of the body without returning is a runtime error for `TNS`- or `FUNC`-returning functions.
@@ -368,6 +386,9 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `ISSTR(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `STR`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
 - `ISTNS(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `TNS`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
 - `TYPE(ANY: obj):STR` ; returns the runtime type name of `obj` as a `STR` — one of `INT`, `FLT`, `STR`, or `TNS` (extension-defined type names are returned unchanged when extensions are enabled).
+- `SIGNATURE(SYMBOL: sym):STR` ; returns a textual signature for the identifier `sym`. If `sym` denotes a user-defined function (`FUNC`) the result is formatted in the canonical form used in this specification, e.g. `FUNC name(T1: arg1, T2: arg2 = default):R`. For other bound symbols the result is `TYPE: symbol` (for example `INT: x`). The argument must be a plain identifier.
+- `COPY(ANY: obj):ANY` ; return a shallow copy of `obj`. For `INT`, `FLT`, `STR`, and `FUNC` this produces a same-typed value wrapper. For `TNS` it returns a newly-allocated tensor with the same shape whose elements reference the original element values (shallow). For `MAP` it returns a new map with the same keys and the same value references (shallow).
+- `DEEPCOPY(ANY: obj):ANY` ; return a deep copy of `obj`. Recursively copies container values so that the returned value shares no mutable container objects with the original: tensors are duplicated element-by-element and maps are duplicated with their values deep-copied. Primitive values (`INT`, `FLT`, `STR`, and `FUNC`) are treated as atomic and copied by value.
 - `SLEN(STR: s):INT` returns the length of the supplied `STR` in characters as an `INT`. The argument must be a `STR`; passing an `INT` raises a runtime error.
 - `ILEN(INT: n):INT` returns the length in binary digits of the absolute value of the supplied `INT`. `ILEN(0)` returns 1. The argument must be an `INT`; passing a `STR` raises a runtime error.
 
@@ -427,11 +448,17 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `SCATTER(TNS: src, TNS: dst, TNS: ind):TNS` — Returns a copy of `dst` with a rectangular slice replaced by `src`. `ind` must be a 2D tensor of `INT` pairs with shape `[TLEN(dst, 1), 10]` (binary `10` = decimal 2), i.e., one `[lo, hi]` row per destination dimension (rank; for example `rank = TLEN(SHAPE(dst), 1)`). Indices are 1-based; negatives follow the tensor indexing rules (for example, `-1` is the last element) and `0` is invalid. For each dimension, the inclusive span `hi - lo + 1` must equal the corresponding `src` dimension length, and all bounds must fall within `dst`. Elements outside the slice are copied from `dst` unchanged.
 - `FILL(TNS: tensor, ANY: value):TNS` — Returns a new tensor with the same shape as `tensor`, filled with `value`. The supplied value`s type must match the existing element type at every position.
 - `TNS(TNS: shape, ANY: value):TNS` — Creates a new `TNS` with the shape described by a 1D `TNS` of positive `INT` lengths, filled with `value`.
-- `CONVOLVE(TNS: x, TNS: kernel):TNS` — N-dimensional discrete convolution producing an output tensor with the same shape as `x`. The `kernel` must have the same rank as `x` and each kernel dimension length must be odd (so the kernel has a well-defined center). At the boundaries, out-of-range sample coordinates are clamped to the nearest valid index (replicate padding). Both tensors must contain only `INT` or only `FLT` elements (no mixed element types within a tensor). If both tensors are `INT`-valued, the output is an `INT` tensor; otherwise the output is a `FLT` tensor.
+- `CONV(TNS: x, TNS: kernel):TNS` — N-dimensional discrete convolution producing an output tensor with the same shape as `x`. The `kernel` must have the same rank as `x` and each kernel dimension length must be odd (so the kernel has a well-defined center). At the boundaries, out-of-range sample coordinates are clamped to the nearest valid index (replicate padding). Both tensors must contain only `INT` or only `FLT` elements (no mixed element types within a tensor). If both tensors are `INT`-valued, the output is an `INT` tensor; otherwise the output is a `FLT` tensor.
 - `MADD/MSUB/MMUL/MDIV(TNS: x, TNS: y):TNS` — Elementwise addition, subtraction, multiplication, and division. Shapes must match; all elements must be `INT` or all `FLT` (no mixing). Division by zero is an error.
 - `MSUM(TNS: t1, ..., TNS: tN):TNS` — Elementwise sum across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
 - `MPROD(TNS: t1, ..., TNS: tN):TNS` — Elementwise product across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
 - `TADD/TSSUB/TMUL/TDIV/TPOW(TNS: x, INT|FLT: y):TNS` — Tensor-scalar arithmetic. Tensor elements and scalar must both be `INT` or both be `FLT` (no mixing). Division by zero is an error.
+
+### Map operations
+- `KEYS(MAP: map): TNS` - Return a 1-D `TNS` containing each of the keys in `map`, in insertion order. Each element of the returned tensor has the native key type (`INT`, `FLT`, or `STR`).
+- `VALUES(MAP: map): TNS` - Return a 1-D `TNS` containing each of the values in `map`, in insertion order. Each element of the returned tensor is the stored value and preserves its type (`INT`, `FLT`, `STR`, `TNS`, or `MAP`).
+- `KEYIN(INT|FLT|STR: key, MAP: map):INT` - Returns `1` if `map` contains `key` (matching by type and value), otherwise `0`.
+- `VALUEIN(ANY: value, MAP: map):INT` - Returns `1` if any value stored in `map` is equal to `value` using the language's equality semantics, otherwise `0`.
 
 ### Concurrency
 
@@ -458,6 +485,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
 ### Module operations:
 - `IMPORT(MODULE: name)` or `IMPORT(MODULE: name, SYMBOL: alias)` — Loads another source file and exposes it as a distinct module namespace. When an optional alias identifier is supplied, the imported module's bindings are exposed under the `alias` prefix rather than the module's own name (for example, `IMPORT(mod, ali)` makes `ali.F()` valid while `mod.F()` is not).
+- `IMPORT_PATH(STR: path)` — Loads an ASM-Lang module from the absolute filesystem `path` provided as a `STR`. The argument must be an absolute path to a `.asmln` source file. The imported module is treated the same as `IMPORT` with respect to parsing, execution isolation, function/module caching, and companion extension loading (companion `<module>.asmxt` alongside the resolved file and a built-in `ext/<module>.py` are both checked and loaded if present). The module's basename (filename without extension) is used as the module identifier for qualifying exported bindings.
 
   The first argument must be an identifier naming a module; the interpreter first looks for a file named `<name>.asmln` in the same directory as the referring source file. When the referring source is provided via the `-source` string literal mode, the primary search directory is the process's current working directory. If the module file is not found there, the interpreter will additionally attempt to load the file from a `lib` subdirectory located alongside the interpreter implementation (that is, `<interpreter_dir>/lib/<name>.asmln`, where `<interpreter_dir>` is the directory containing the interpreter script or executable).
 
@@ -507,7 +535,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `WHILE(condition){ block }`
 - `FOR(counter, INT: target){ block }` ; `counter` initialized to 0, loop until counter >= target
 - `PARFOR(counter, INT: target){ block }` ; concurrently execute `target` iterations with `counter` bound to `1..T`. Iteration bodies run in parallel (threaded) and may race on shared mutable identifiers. `CONTINUE()` ends the current iteration only; `BREAK(n)` terminates the entire `PARFOR` (prevents starting further iterations, waits for in-flight iterations to finish, then propagates the `BreakSignal`). Runtime errors raised inside iterations are collected and the first such error is re-raised after all iterations join.
-- `FUNC name(T1:arg1, T2:arg2, ..., TN:argN):R{ block }` ; typed function definition with return type R (`INT`, `STR`, or `TNS`); optional defaults use `Tk:arg=expr` and must appear only after all positional parameters. Functions with return type `TNS` must explicitly execute `RETURN(value)`; there is no implicit default tensor value.
+- `FUNC name(T1: arg1, T2: arg2, ..., TN: argN):R{ block }` ; typed function definition with return type R (`INT`, `STR`, or `TNS`); optional defaults use `Tk: arg = expr` and must appear only after all positional parameters. Functions with return type `TNS` must explicitly execute `RETURN(value)`; there is no implicit default tensor value.
 - `RETURN(ANY: a)` ; return from function with value `a`
 - `POP(SYMBOL: x)` — Convenience statement combining `RETURN` and `DEL`: when executed inside a function body it retrieves the current value of the identifier `x`, deletes the binding `x` from the environment (so subsequent references are an error), and returns the retrieved value to the caller. Using `POP` outside of a function is a runtime error.
 - `BREAK(INT: n)` ; break out of the innermost `n` enclosing loops; raises a runtime error if `n` ≤ 0 or if `n` is greater than the current loop nesting depth
