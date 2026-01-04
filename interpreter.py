@@ -39,6 +39,7 @@ from parser import (
     Literal,
     MapLiteral,
     Param,
+    PointerExpression,
     Parser,
     Program,
     ReturnStatement,
@@ -90,6 +91,15 @@ class Map:
 class Value:
     type: str
     value: Any
+
+
+@dataclass(slots=True)
+class PointerRef:
+    env: "Environment"
+    name: str
+
+    def __repr__(self) -> str:  # pragma: no cover - debug aid only
+        return f"<ptr {self.name}>"
 
 
 class ASMRuntimeError(ASMError):
@@ -175,6 +185,21 @@ class Environment:
                     f"Identifier '{name}' is frozen and cannot be reassigned",
                     rewrite_rule="ASSIGN",
                 )
+            incoming_ptr = value.value if isinstance(value.value, PointerRef) else None
+            if incoming_ptr is not None and incoming_ptr.env is found_env and incoming_ptr.name == name:
+                raise ASMRuntimeError(
+                    "Cannot create self-referential pointer",
+                    rewrite_rule="ASSIGN",
+                )
+            if isinstance(existing.value, PointerRef):
+                ptr = existing.value
+                if ptr.env is found_env and ptr.name == name:
+                    raise ASMRuntimeError(
+                        "Cannot assign through self-referential pointer",
+                        rewrite_rule="ASSIGN",
+                    )
+                ptr.env.set(ptr.name, value, declared_type=None)
+                return
             if declared_type and existing.type != declared_type:
                 raise ASMRuntimeError(
                     f"Type mismatch for '{name}': previously declared as {existing.type}",
@@ -254,6 +279,8 @@ class Environment:
             if val.type == TYPE_FUNC:
                 func_name = getattr(val.value, "name", "<func>")
                 return f"{val.type}:{func_name}"
+            if isinstance(val.value, PointerRef):
+                return f"{val.type}:&{val.value.name}"
             try:
                 rendered = str(val.value)
             except Exception:
@@ -575,12 +602,14 @@ class Builtins:
 
     # Helpers
     def _expect_int(self, value: Value, rule: str, location: SourceLocation) -> int:
+        value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_INT:
             raise ASMRuntimeError(f"{rule} expects integer arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, int)
         return value.value
 
     def _expect_flt(self, value: Value, rule: str, location: SourceLocation) -> float:
+        value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_FLT:
             raise ASMRuntimeError(f"{rule} expects float arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, float)
@@ -757,16 +786,36 @@ class Builtins:
         return Value(TYPE_FLT, float(math.floor(math.log2(a))))
 
     def _expect_str(self, value: Value, rule: str, location: SourceLocation) -> str:
+        value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_STR:
             raise ASMRuntimeError(f"{rule} expects string arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, str)
         return value.value
 
     def _expect_tns(self, value: Value, rule: str, location: SourceLocation) -> Tensor:
+        value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_TNS:
             raise ASMRuntimeError(f"{rule} expects tensor arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, Tensor)
         return value.value
+
+    def _deref_pointer(self, value: Value, *, rule: str, location: SourceLocation) -> Value:
+        current = value
+        hops = 0
+        while isinstance(current.value, PointerRef):
+            hops += 1
+            if hops > 128:
+                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
+            ptr = current.value
+            target = ptr.env.get_optional(ptr.name)
+            if target is None:
+                raise ASMRuntimeError(
+                    f"Pointer target '{ptr.name}' is undefined",
+                    location=location,
+                    rewrite_rule=rule,
+                )
+            current = target
+        return current
 
     def _normalize_coding(self, coding_raw: str, rule: str, location: SourceLocation) -> str:
         tag = coding_raw.strip().lower().replace("_", "-")
@@ -3479,12 +3528,100 @@ class Interpreter:
         return self.builtins._expect_str(value, rule, location)
 
     def _expect_func(self, value: "Value", rule: str, location: SourceLocation) -> Function:
+        value = self._deref_value(value, location=location, rule=rule)
         if value.type != TYPE_FUNC:
             raise ASMRuntimeError(f"{rule} expects function value", location=location, rewrite_rule=rule)
         func_obj = value.value
         if not isinstance(func_obj, Function):
             raise ASMRuntimeError("Invalid function value", location=location, rewrite_rule=rule)
         return func_obj
+
+    # ---- Pointer helpers ----
+    def _resolve_pointer_target(
+        self, name: str, env: Environment, location: SourceLocation, *, rule: str = "POINTER"
+    ) -> Tuple[Environment, str, Value]:
+        current_env = env
+        current_name = name
+        hops = 0
+        while True:
+            target_val = current_env.get_optional(current_name)
+            if target_val is None:
+                raise ASMRuntimeError(
+                    f"Pointer target '{current_name}' is undefined",
+                    location=location,
+                    rewrite_rule=rule,
+                )
+            if not isinstance(target_val.value, PointerRef):
+                return current_env, current_name, target_val
+            hops += 1
+            if hops > 128:
+                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
+            ptr = target_val.value
+            current_env = ptr.env
+            current_name = ptr.name
+
+    def _make_pointer_value(self, name: str, env: Environment, location: SourceLocation) -> Value:
+        target_env = env._find_env(name)
+        if target_env is None:
+            raise ASMRuntimeError(
+                f"Pointer target '{name}' is undefined",
+                location=location,
+                rewrite_rule="POINTER",
+            )
+        # Do not allow creating a new pointer that targets a frozen or
+        # permanently-frozen identifier. Existing pointers or frozen
+        # identifiers may remain frozen, but no new aliasing may be created
+        # until the identifier is thawed.
+        if name in target_env.frozen and name not in target_env.permafrozen:
+            raise ASMRuntimeError(
+                f"Cannot create pointer to frozen identifier '{name}'",
+                location=location,
+                rewrite_rule="POINTER",
+            )
+        elif name in target_env.permafrozen:
+            raise ASMRuntimeError(
+                f"Cannot create pointer to permanently-frozen identifier '{name}'",
+                location=location,
+                rewrite_rule="POINTER",
+            )
+        resolved_env, resolved_name, resolved_val = self._resolve_pointer_target(name, target_env, location)
+        return Value(resolved_val.type, PointerRef(env=resolved_env, name=resolved_name))
+
+    def _deref_value(
+        self,
+        value: Value,
+        *,
+        location: Optional[SourceLocation] = None,
+        rule: Optional[str] = None,
+    ) -> Value:
+        current = value
+        hops = 0
+        while isinstance(current.value, PointerRef):
+            hops += 1
+            if hops > 128:
+                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule or "POINTER")
+            ptr = current.value
+            target_val = ptr.env.get_optional(ptr.name)
+            if target_val is None:
+                raise ASMRuntimeError(
+                    f"Pointer target '{ptr.name}' is undefined",
+                    location=location,
+                    rewrite_rule=rule or "POINTER",
+                )
+            current = target_val
+        return current
+
+    def _assign_pointer_target(
+        self, ptr: PointerRef, new_value: Value, *, location: Optional[SourceLocation], rule: str
+    ) -> None:
+        try:
+            ptr.env.set(ptr.name, new_value)
+        except ASMRuntimeError as err:
+            if err.location is None:
+                err.location = location
+            if err.rewrite_rule is None:
+                err.rewrite_rule = rule
+            raise
     def parse(self) -> Program:
         lexer = Lexer(self.source, self.filename)
         tokens = lexer.tokenize()
@@ -3526,6 +3663,7 @@ class Interpreter:
 
     def _execute_block(self, statements: List[Statement], env: Environment) -> None:
         i = 0
+        n_statements = len(statements)
         emit_event = self._emit_event
         log_step = self._log_step
         eval_expr = self._evaluate_expression
@@ -3533,10 +3671,10 @@ class Interpreter:
 
         frame: Frame = self.call_stack[-1]
         gotopoints: Dict[int, int] = frame.gotopoints
-        while i < len(statements):
+        while i < n_statements:
             statement = statements[i]
             emit_event("before_statement", self, statement, env)
-            if isinstance(statement, GotopointStatement):
+            if type(statement) is GotopointStatement:
                 log_step(rule=statement.__class__.__name__, location=statement.location)
                 gid = eval_expr(statement.expression, env)
                 if gid.type == TYPE_INT:
@@ -3576,7 +3714,8 @@ class Interpreter:
 
     def _execute_statement(self, statement: Statement, env: Environment) -> None:
         self._log_step(rule=statement.__class__.__name__, location=statement.location)
-        if isinstance(statement, Assignment):
+        statement_type = type(statement)
+        if statement_type is Assignment:
             if statement.target in self.functions:
                 raise ASMRuntimeError(
                     f"Identifier '{statement.target}' already bound as function", location=statement.location, rewrite_rule="ASSIGN"
@@ -3584,9 +3723,9 @@ class Interpreter:
             value = self._evaluate_expression(statement.expression, env)
             env.set(statement.target, value, declared_type=statement.declared_type)
             return
-        if isinstance(statement, TensorSetStatement):
+        if statement_type is TensorSetStatement:
             base_expr, index_nodes = self._gather_index_chain(statement.target)
-            if not isinstance(base_expr, Identifier):
+            if type(base_expr) is not Identifier:
                 raise ASMRuntimeError(
                     "Indexed assignment requires identifier base",
                     location=statement.location,
@@ -3603,6 +3742,7 @@ class Interpreter:
                 )
 
             base_val = self._evaluate_expression(base_expr, env)
+            base_val = self._deref_value(base_val, location=statement.location, rule="ASSIGN")
             # MAP assignment path: support multi-key assignment like m<k1,k2> = v
             if base_val.type == TYPE_MAP:
                 assert isinstance(base_val.value, Map)
@@ -3651,7 +3791,9 @@ class Interpreter:
             expect_int = self._expect_int
             # Check if any index is a Range (slice). If none, mutate a single
             # element as before. If ranges present, perform a slice assignment.
-            has_range = any(isinstance(n, (Range, Star)) for n in index_nodes)
+            RangeT = Range
+            StarT = Star
+            has_range = any((type(n) is RangeT) or (type(n) is StarT) for n in index_nodes)
             if not has_range:
                 indices: List[int] = []
                 indices_append = indices.append
@@ -3665,13 +3807,14 @@ class Interpreter:
             arr = base_val.value.data.reshape(tuple(base_val.value.shape))
             indexers: List[object] = []
             for dim, node in enumerate(index_nodes):
-                if isinstance(node, Range):
+                node_type = type(node)
+                if node_type is Range:
                     lo_val = expect_int(eval_expr(node.lo, env), "ASSIGN", statement.location)
                     hi_val = expect_int(eval_expr(node.hi, env), "ASSIGN", statement.location)
                     lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "ASSIGN", statement.location)
                     hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "ASSIGN", statement.location)
                     indexers.append(slice(lo_res - 1, hi_res))
-                elif type(node).__name__ == "Star":
+                elif node_type is Star:
                     # Full-dimension slice `*` selects the entire axis
                     indexers.append(slice(None, None))
                 else:
@@ -3709,22 +3852,22 @@ class Interpreter:
             for i in range(new_flat.size):
                 target_flat[i] = new_flat[i]
             return
-        if isinstance(statement, ExpressionStatement):
+        if statement_type is ExpressionStatement:
             self._evaluate_expression(statement.expression, env)
             return
-        if isinstance(statement, IfStatement):
+        if statement_type is IfStatement:
             self._execute_if(statement, env)
             return
-        if isinstance(statement, WhileStatement):
+        if statement_type is WhileStatement:
             self._execute_while(statement, env)
             return
-        if isinstance(statement, ForStatement):
+        if statement_type is ForStatement:
             self._execute_for(statement, env)
             return
-        if isinstance(statement, ParForStatement):
+        if statement_type is ParForStatement:
             self._execute_parfor(statement, env)
             return
-        if isinstance(statement, FuncDef):
+        if statement_type is FuncDef:
             if statement.name in self.builtins.table:
                 raise ASMRuntimeError(
                     f"Function name '{statement.name}' conflicts with built-in", location=statement.location
@@ -3739,13 +3882,13 @@ class Interpreter:
                 closure=env,
             )
             return
-        if isinstance(statement, PopStatement):
+        if statement_type is PopStatement:
             frame: Frame = self.call_stack[-1]
             if frame.name == "<top-level>":
                 raise ASMRuntimeError("POP outside of function", location=statement.location, rewrite_rule="POP")
             # Expect identifier expression to delete a symbol
             expr = statement.expression
-            if not isinstance(expr, Identifier):
+            if type(expr) is not Identifier:
                 raise ASMRuntimeError("POP expects identifier", location=statement.location, rewrite_rule="POP")
             name = expr.name
             try:
@@ -3759,7 +3902,7 @@ class Interpreter:
                 err.location = statement.location
                 raise
             raise ReturnSignal(value)
-        if isinstance(statement, ReturnStatement):
+        if statement_type is ReturnStatement:
             frame: Frame = self.call_stack[-1]
             if frame.name == "<top-level>":
                 raise ASMRuntimeError("RETURN outside of function", location=statement.location, rewrite_rule="RETURN")
@@ -3797,19 +3940,19 @@ class Interpreter:
                             rewrite_rule="RETURN",
                         )
             raise ReturnSignal(value)
-        if isinstance(statement, BreakStatement):
+        if statement_type is BreakStatement:
             count_val = self._evaluate_expression(statement.expression, env)
             count = self._expect_int(count_val, "BREAK", statement.location)
             if count <= 0:
                 raise ASMRuntimeError("BREAK count must be > 0", location=statement.location, rewrite_rule="BREAK")
             raise BreakSignal(count)
-        if isinstance(statement, ContinueStatement):
+        if statement_type is ContinueStatement:
             # Signal to the innermost loop to skip to next iteration.
             raise ContinueSignal()
-        if isinstance(statement, GotoStatement):
+        if statement_type is GotoStatement:
             target = self._evaluate_expression(statement.expression, env)
             raise JumpSignal(target)
-        if isinstance(statement, AsyncStatement):
+        if statement_type is AsyncStatement:
             # Execute the block synchronously inside a background thread
             block = statement.block
             loc = statement.location
@@ -4041,6 +4184,7 @@ class Interpreter:
             raise ASMRuntimeError(f"Error in PARFOR iteration: {exc}", location=loc, rewrite_rule="PARFOR")
 
     def _condition_int(self, value: Value, location: Optional[SourceLocation]) -> int:
+        value = self._deref_value(value, location=location, rule="COND")
         # Fast-path the built-in scalar types; this avoids repeated registry
         # lookups and TypeContext allocations on tight control-flow loops.
         # Extension-defined types still go through the registry.
@@ -4063,6 +4207,7 @@ class Interpreter:
         return int(spec.condition_int(ctx, value))
 
     def _expect_int(self, value: Value, rule: str, location: Optional[SourceLocation]) -> int:
+        value = self._deref_value(value, location=location, rule=rule)
         if value.type != TYPE_INT:
             raise ASMRuntimeError(f"{rule} expects integer value", location=location, rewrite_rule=rule)
         return value.value  # type: ignore[return-value]
@@ -4084,6 +4229,8 @@ class Interpreter:
         return False
 
     def _values_equal(self, left: Value, right: Value) -> bool:
+        left = self._deref_value(left)
+        right = self._deref_value(right)
         if left.type != right.type:
             return False
         if left.type == TYPE_TNS:
@@ -4179,7 +4326,7 @@ class Interpreter:
         flat: List[Value] = []
         subshape: Optional[List[int]] = None
         for item in items:
-            if isinstance(item, TensorLiteral):
+            if type(item) is TensorLiteral:
                 nested = self._build_tensor_from_literal(item, env)
                 if subshape is None:
                     subshape = nested.shape
@@ -4206,7 +4353,7 @@ class Interpreter:
         # Avoid repeated list concatenations for deep chains like a[1][2][3].
         parts: List[List[Expression]] = []
         current: Expression = expr
-        while isinstance(current, IndexExpression):
+        while type(current) is IndexExpression:
             parts.append(current.indices)
             current = current.base
         if not parts:
@@ -4219,24 +4366,30 @@ class Interpreter:
         return current, out
 
     def _evaluate_expression(self, expression: Expression, env: Environment) -> Value:
-        if isinstance(expression, Literal):
+        expression_type = type(expression)
+        if expression_type is Literal:
             return Value(expression.literal_type, expression.value)
-        if isinstance(expression, TensorLiteral):
+        if expression_type is TensorLiteral:
             tensor = self._build_tensor_from_literal(expression, env)
             return Value(TYPE_TNS, tensor)
-        if isinstance(expression, MapLiteral):
+        if expression_type is MapLiteral:
             m = Map()
+            eval_expr = self._evaluate_expression
             for key_node, val_node in expression.items:
-                key_val = self._evaluate_expression(key_node, env)
+                key_val = eval_expr(key_node, env)
+                key_val = self._deref_value(key_val, location=expression.location, rule="MAP")
                 if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
                     raise ASMRuntimeError("Map literal keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="MAP")
                 key = (key_val.type, key_val.value)
-                val = self._evaluate_expression(val_node, env)
+                val = eval_expr(val_node, env)
                 m.data[key] = val
             return Value(TYPE_MAP, m)
-        if isinstance(expression, IndexExpression):
+        if expression_type is PointerExpression:
+            return self._make_pointer_value(expression.target, env, expression.location)
+        if expression_type is IndexExpression:
             base_expr, index_nodes = self._gather_index_chain(expression)
             base_val = self._evaluate_expression(base_expr, env)
+            base_val = self._deref_value(base_val, location=expression.location, rule="INDEX")
             # Tensor indexing path (existing semantics)
             if base_val.type == TYPE_TNS:
                 assert isinstance(base_val.value, Tensor)
@@ -4246,7 +4399,9 @@ class Interpreter:
                 # behave as before and return a single element. If any ranges
                 # or stars present, construct numpy slicing indices and return
                 # a Tensor.
-                has_range = any(isinstance(n, (Range, Star)) for n in index_nodes)
+                RangeT = Range
+                StarT = Star
+                has_range = any((type(n) is RangeT) or (type(n) is StarT) for n in index_nodes)
                 if not has_range:
                     indices: List[int] = []
                     indices_append = indices.append
@@ -4260,7 +4415,8 @@ class Interpreter:
                 arr = base_val.value.data.reshape(tuple(base_val.value.shape))
                 indexers: List[object] = []
                 for dim, node in enumerate(index_nodes):
-                    if isinstance(node, Range):
+                    node_type = type(node)
+                    if node_type is Range:
                         lo_val = expect_int(eval_expr(node.lo, env), "INDEX", expression.location)
                         hi_val = expect_int(eval_expr(node.hi, env), "INDEX", expression.location)
                         # validate both endpoints
@@ -4268,7 +4424,7 @@ class Interpreter:
                         hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "INDEX", expression.location)
                         # convert to 0-based slice: start = lo_res-1, stop = hi_res (exclusive)
                         indexers.append(slice(lo_res - 1, hi_res))
-                    elif type(node).__name__ == "Star":
+                    elif node_type is Star:
                         # Full-dimension slice `*` selects the entire axis
                         indexers.append(slice(None, None))
                     else:
@@ -4291,8 +4447,9 @@ class Interpreter:
                 assert isinstance(base_val.value, Map)
                 eval_expr = self._evaluate_expression
                 current = base_val
-                for node in index_nodes:
+                for idx, node in enumerate(index_nodes):
                     key_val = eval_expr(node, env)
+                    key_val = self._deref_value(key_val, location=expression.location, rule="INDEX")
                     if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
                         raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="INDEX")
                     key = (key_val.type, key_val.value)
@@ -4301,13 +4458,18 @@ class Interpreter:
                     if key not in current.value.data:
                         raise ASMRuntimeError(f"Key not found: {key_val.value}", location=expression.location, rewrite_rule="INDEX")
                     current = current.value.data[key]
+                    if idx + 1 < len(index_nodes):
+                        current = self._deref_value(current, location=expression.location, rule="INDEX")
                 return current
 
             raise ASMRuntimeError("Indexed access requires a tensor or map", location=expression.location, rewrite_rule="INDEX")
-        if isinstance(expression, Identifier):
+        if expression_type is Identifier:
             found = env.get_optional(expression.name)
             if found is not None:
-                return found
+                # Normal identifier access should follow pointer aliases.
+                # `@name` is the explicit pointer form and returns a PointerRef;
+                # a plain `name` should yield the underlying value.
+                return self._deref_value(found, location=expression.location, rule="IDENT")
             resolved_name: Optional[str] = None
             if self.call_stack:
                 resolved_name = self._resolve_user_function_name(frame_name=self.call_stack[-1].name, callee=expression.name)
@@ -4317,7 +4479,15 @@ class Interpreter:
                 return Value(TYPE_FUNC, self.functions[resolved_name])
             if expression.name == "INPUT":
                 self._emit_event("before_call", self, "INPUT", [], env, expression.location)
-                result = self.builtins.invoke(self, "INPUT", [], [], env, expression.location)
+                builtin = self.builtins.table.get("INPUT")
+                if builtin is None:
+                    raise ASMRuntimeError("Unknown function 'INPUT'", location=expression.location)
+                supplied = 0
+                if supplied < builtin.min_args:
+                    raise ASMRuntimeError(f"INPUT expects at least {builtin.min_args} arguments", rewrite_rule="INPUT", location=expression.location)
+                if builtin.max_args is not None and supplied > builtin.max_args:
+                    raise ASMRuntimeError(f"INPUT expects at most {builtin.max_args} arguments", rewrite_rule="INPUT", location=expression.location)
+                result = builtin.impl(self, [], [], env, expression.location)
                 self._emit_event("after_call", self, "INPUT", result, env, expression.location)
                 self._log_step(rule="INPUT", location=expression.location, extra={"args": [], "result": result.value})
                 return result
@@ -4326,9 +4496,9 @@ class Interpreter:
                 location=expression.location,
                 rewrite_rule="IDENT",
             )
-        if isinstance(expression, CallExpression):
+        if expression_type is CallExpression:
             callee_expr = expression.callee
-            callee_ident = callee_expr.name if isinstance(callee_expr, Identifier) else None
+            callee_ident = callee_expr.name if type(callee_expr) is Identifier else None
 
             bound_func_value = env.get_optional(callee_ident) if callee_ident is not None else None
             resolved_function: Optional[Function] = None
@@ -4351,12 +4521,20 @@ class Interpreter:
                 if any(arg.name for arg in expression.args):
                     raise ASMRuntimeError("IMPORT does not accept keyword arguments", location=expression.location, rewrite_rule="IMPORT")
                 first_expr = expression.args[0].expression if expression.args else None
-                module_label = first_expr.name if isinstance(first_expr, Identifier) else None
+                module_label = first_expr.name if (first_expr is not None and type(first_expr) is Identifier) else None
                 dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
                 arg_nodes = [arg.expression for arg in expression.args]
                 try:
                     self._emit_event("before_call", self, "IMPORT", [], env, expression.location)
-                    result = self.builtins.invoke(self, "IMPORT", dummy_args, arg_nodes, env, expression.location)
+                    builtin = self.builtins.table.get("IMPORT")
+                    if builtin is None:
+                        raise ASMRuntimeError("Unknown function 'IMPORT'", location=expression.location)
+                    supplied = len(dummy_args)
+                    if supplied < builtin.min_args:
+                        raise ASMRuntimeError(f"IMPORT expects at least {builtin.min_args} arguments", rewrite_rule="IMPORT", location=expression.location)
+                    if builtin.max_args is not None and supplied > builtin.max_args:
+                        raise ASMRuntimeError(f"IMPORT expects at most {builtin.max_args} arguments", rewrite_rule="IMPORT", location=expression.location)
+                    result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
                     self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "status": "error"})
                     raise
@@ -4375,7 +4553,15 @@ class Interpreter:
                 arg_nodes = [arg.expression for arg in expression.args]
                 try:
                     self._emit_event("before_call", self, callee_ident, [], env, expression.location)
-                    result = self.builtins.invoke(self, callee_ident, dummy_args, arg_nodes, env, expression.location)
+                    builtin = self.builtins.table.get(callee_ident)
+                    if builtin is None:
+                        raise ASMRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
+                    supplied = len(dummy_args)
+                    if supplied < builtin.min_args:
+                        raise ASMRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                    if builtin.max_args is not None and supplied > builtin.max_args:
+                        raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                    result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
                 except ASMRuntimeError:
                     self._log_step(rule=callee_ident, location=expression.location, extra={"args": None, "status": "error"})
                     raise
@@ -4385,8 +4571,12 @@ class Interpreter:
 
             positional_args: List[Value] = []
             keyword_args: Dict[str, Value] = {}
+            eval_expr = self._evaluate_expression
+            pointer_args: List[PointerRef] = []
             for arg in expression.args:
-                value = self._evaluate_expression(arg.expression, env)
+                value = eval_expr(arg.expression, env)
+                if isinstance(value.value, PointerRef):
+                    pointer_args.append(value.value)
                 if arg.name is None:
                     positional_args.append(value)
                 else:
@@ -4431,7 +4621,17 @@ class Interpreter:
                             )
                     arg_nodes = [a.expression for a in expression.args]
                     self._emit_event("before_call", self, callee_ident, positional_args, env, expression.location)
-                    result = self.builtins.invoke(self, callee_ident, positional_args, arg_nodes, env, expression.location)
+                    builtin = self.builtins.table.get(callee_ident)
+                    if builtin is None:
+                        raise ASMRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
+                    supplied = len(positional_args)
+                    if supplied < builtin.min_args:
+                        raise ASMRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                    if builtin.max_args is not None and supplied > builtin.max_args:
+                        raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                    result = builtin.impl(self, positional_args, arg_nodes, env, expression.location)
+                    if pointer_args:
+                        self._assign_pointer_target(pointer_args[0], result, location=expression.location, rule=callee_ident)
                 except ASMRuntimeError:
                     self._log_step(
                         rule=callee_ident,

@@ -7,7 +7,7 @@ from fractions import Fraction
 from lexer import ASMParseError, Token
 
 
-@dataclass
+@dataclass(slots=True)
 class SourceLocation:
     file: str
     line: int
@@ -15,12 +15,12 @@ class SourceLocation:
     statement: str
 
 
-@dataclass
+@dataclass(slots=True)
 class Node:
     location: SourceLocation
 
 
-@dataclass
+@dataclass(slots=True)
 class Program(Node):
     statements: List["Statement"]
 
@@ -29,30 +29,30 @@ class Statement(Node):
     pass
 
 
-@dataclass
+@dataclass(slots=True)
 class Block(Node):
     statements: List[Statement]
 
 
-@dataclass
+@dataclass(slots=True)
 class Assignment(Statement):
     target: str
     expression: "Expression"
     declared_type: Optional[str]
 
 
-@dataclass
+@dataclass(slots=True)
 class ExpressionStatement(Statement):
     expression: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class IfBranch:
     condition: "Expression"
     block: Block
 
 
-@dataclass
+@dataclass(slots=True)
 class IfStatement(Statement):
     condition: "Expression"
     then_block: Block
@@ -60,27 +60,27 @@ class IfStatement(Statement):
     else_block: Optional[Block]
 
 
-@dataclass
+@dataclass(slots=True)
 class WhileStatement(Statement):
     condition: "Expression"
     block: Block
 
 
-@dataclass
+@dataclass(slots=True)
 class ForStatement(Statement):
     counter: str
     target_expr: "Expression"
     block: Block
 
 
-@dataclass
+@dataclass(slots=True)
 class ParForStatement(Statement):
     counter: str
     target_expr: "Expression"
     block: Block
 
 
-@dataclass
+@dataclass(slots=True)
 class FuncDef(Statement):
     name: str
     params: List["Param"]
@@ -88,44 +88,44 @@ class FuncDef(Statement):
     body: Block
 
 
-@dataclass
+@dataclass(slots=True)
 class Param:
     type: str
     name: str
     default: Optional["Expression"]
 
 
-@dataclass
+@dataclass(slots=True)
 class ReturnStatement(Statement):
     expression: Optional["Expression"]
 
 
-@dataclass
+@dataclass(slots=True)
 class PopStatement(Statement):
     expression: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class BreakStatement(Statement):
     expression: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class GotoStatement(Statement):
     expression: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class GotopointStatement(Statement):
     expression: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class ContinueStatement(Statement):
     pass
 
 
-@dataclass
+@dataclass(slots=True)
 class AsyncStatement(Statement):
     block: Block
 
@@ -134,58 +134,63 @@ class Expression(Node):
     pass
 
 
-@dataclass
+@dataclass(slots=True)
 class TensorLiteral(Expression):
     items: List["Expression"]
 
 
-@dataclass
+@dataclass(slots=True)
 class MapLiteral(Expression):
     items: List[Tuple["Expression", "Expression"]]
 
 
-@dataclass
+@dataclass(slots=True)
 class IndexExpression(Expression):
     base: Expression
     indices: List[Expression]
 
 
-@dataclass
+@dataclass(slots=True)
 class Range(Expression):
     lo: Expression
     hi: Expression
 
 
-@dataclass
+@dataclass(slots=True)
 class Star(Expression):
     """Represents a full-dimension slice `*` used inside tensor indices."""
     pass
 
 
-@dataclass
+@dataclass(slots=True)
 class TensorSetStatement(Statement):
     target: IndexExpression
     value: "Expression"
 
 
-@dataclass
+@dataclass(slots=True)
 class Literal(Expression):
     value: Union[int, float, str]
     literal_type: str
 
 
-@dataclass
+@dataclass(slots=True)
 class Identifier(Expression):
     name: str
 
 
-@dataclass
+@dataclass(slots=True)
+class PointerExpression(Expression):
+    target: str
+
+
+@dataclass(slots=True)
 class CallExpression(Expression):
     callee: Expression
     args: List["CallArgument"]
 
 
-@dataclass
+@dataclass(slots=True)
 class CallArgument:
     name: Optional[str]
     expression: Expression
@@ -451,6 +456,11 @@ class Parser:
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
             return Identifier(location=location, name=ident.value)
+        if token.type == "AT":
+            at_tok = self._consume("AT")
+            ident_tok = self._consume("IDENT")
+            location: SourceLocation = self._location_from_token(at_tok)
+            return PointerExpression(location=location, target=ident_tok.value)
         if token.type == "LPAREN":
             self._consume("LPAREN")
             expr: Expression = self._parse_expression()

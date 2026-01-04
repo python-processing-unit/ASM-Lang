@@ -33,7 +33,7 @@ KEYWORDS = {
     "BREAK",
     "CONTINUE",
     "GOTO",
-    "GOTOPOINT"
+    "GOTOPOINT",
 }
 
 SYMBOLS = {
@@ -51,8 +51,8 @@ SYMBOLS = {
 }
 
 # Precompute identifier character sets for fast membership tests
-IDENT_START_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|?"))
-IDENT_PART_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!@$%&~_+|?"))
+IDENT_START_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz23456789/ABCDEFGHIFJKLMNOPQRSTUVWXYZ!$%&~_+|?"))
+IDENT_PART_CHARS = frozenset(list("abcdefghijklmnopqrstuvwxyz1234567890./ABCDEFGHIFJKLMNOPQRSTUVWXYZ!$%&~_+|?"))
 
 
 class Lexer:
@@ -97,6 +97,10 @@ class Lexer:
             if ch == "#":
                 self._consume_comment()
                 continue
+            if ch == "@":
+                tokens_append(Token("AT", "@", self.line, self.column))
+                _advance()
+                continue
             if ch in symbols:
                 tokens_append(Token(symbols[ch], ch, self.line, self.column))
                 _advance()
@@ -115,7 +119,7 @@ class Lexer:
                 line, col = self.line, self.column
                 # Lookahead to see if '-' introduces a signed number.
                 j = self.index + 1
-                n_text = len(text)
+                n_text = n
                 # skip spaces/tabs/carriage returns
                 while j < n_text and text[j] in " \t\r":
                     j += 1
@@ -124,7 +128,7 @@ class Lexer:
                 else:
                     # Emit a DASH token for use in slice expressions.
                     tokens_append(Token("DASH", "-", line, col))
-                    self._advance()
+                    _advance()
                 continue
             if ch in "01":
                 tokens_append(self._consume_unsigned_number())

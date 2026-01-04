@@ -86,11 +86,15 @@ Identifier character set (clarification): The (non-empty) sequence of characters
   - Uppercase letters `A`-`Z`
   - Decimal digits `0`-`9`
   - The punctuation and symbol characters
-    `/ ! @ $ % & ~ _ + | ?`
+    `/ ! $ % & ~ _ + | ?`
 
   As noted above, non-ASCII characters remain disallowed, and the delimiter characters `{`, `}`, `(`, `)`, `=`, `,`, and `#` are never permitted inside identifiers.
 
 This deliberately-permissive identifier character set preserves an unambiguous lexical distinction between binary integer literals (which must begin with `0` or `1`) and identifiers, while allowing module-qualified names and other symbolic conventions to be expressed directly as plain identifiers in source code.
+
+### Pointer operator
+
+The `@` character is a dedicated lexical token (not part of an identifier). When written before an identifier it produces a pointer literal that denotes an alias to an existing identifier in the current lexical environment. The pointer literal syntax is `@name` and is parsed as a distinct expression (see Section 6 for runtime semantics). Because `@` is a separate token it may not appear inside an identifier name.
 
 
 ## 3. Data Model
@@ -203,6 +207,18 @@ Built-in operators and functions can be viewed as pre-defined functions provided
 A variable is created only when it is first assigned with an explicit type annotation of the form `TYPE : name = expression`, where TYPE is `INT`, `FLT`, `STR`, `TNS`, or `FUNC`. For example: `INT : counter = 0` or `FUNC : handler = DISPATCH`. Subsequent assignments to the same name must match the declared type and may omit the type annotation (`counter = ADD(counter,1)`). Assigning to an undeclared name without a type annotation is a runtime error. A variable exists until `DEL(name)` is executed. Referencing a variable that has never been declared, or that has been deleted, is a runtime error.
 
 The language assumes at least a global typed environment mapping identifiers to (type, value) pairs. Function calls create new environments for parameters and local variables, as described in Section 6.2; the precise details of name resolution depend on the chosen scoping rules.
+
+### Pointers
+
+ASM-Lang supports pointer (alias) literals using the `@` prefix. A pointer literal has the form `@name` where `name` is an existing identifier in the visible lexical environment. The `@` token is syntactically distinct from identifiers (see Section 2); it cannot appear inside an identifier name.
+
+- Creation: evaluating `@name` produces a pointer value that refers to the binding named `name`. If `name` is undefined an error is raised. Pointer creation resolves any existing chain of pointers so that the created alias ultimately references the non-pointer target.
+- Dereference-on-read: a plain identifier read behaves as if it were dereferenced: if the bound value is a pointer, reads yield the pointed-to value. Thus if `INT: x = 10` and `INT: y = @x`, then reading `y` yields `10`.
+- Assignment routing: assigning to a variable whose current binding is a pointer mutates the underlying pointer target rather than replacing the pointer object. Assigning a pointer value that would create a direct self-reference is a runtime error; pointer cycles are detected and rejected when they would create an infinite chain.
+- Builtin writeback: when a built-in or function is called with an explicit pointer argument (an argument written using `@`), the runtime may perform a writeback of results into the first pointer argument to support in-place updates (for example `ADD(@x, 1)` increments the pointed-to binding when the builtin semantics specify writeback).
+- Freezing rule: creating a new pointer to a binding that is frozen or permanently frozen is forbidden. If the identifier `name` is marked frozen or permafrozen, evaluating `@name` raises a runtime error. An identifier that already has pointers bound to it may still be frozen or permafrozen; freezing prevents any *new* pointer aliasing from being created to that binding until it is thawed.
+
+Pointers are a convenience for aliasing and in-place update patterns; implementations should reflect pointer creation and dereference operations in the state log so that tracebacks and state replay remain deterministic.
 
 
 ## 7. Execution Model and Semantics
