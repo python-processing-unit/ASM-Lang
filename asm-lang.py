@@ -11,6 +11,8 @@ from interpreter import ASMRuntimeError, Environment, ExitSignal, Interpreter, T
 from lexer import ASMParseError, Lexer
 from parser import Parser, Statement
 
+import tkinter  # Ensure tkinter is available for GUI extensions
+
 
 def _print_internal_error(*, exc: BaseException, interpreter: Optional[Interpreter] = None, verbose: bool = False, traceback_json: bool = False) -> int:
     """Last-resort error handler.

@@ -4,6 +4,7 @@ IMPORT(prime)
 IMPORT(decimal)
 IMPORT(path)
 IMPORT(image)
+IMPORT(gui)
 IMPORT(waveforms)
 IMPORT(stats)
 
@@ -246,7 +247,7 @@ FUNC STDLIB_TESTS():INT{
     DEL(replaced)
 
     # Scale (identity) preserves dimensions
-    TNS: scaled = image.SCALE(bmp, 1, 1, 1)
+    TNS: scaled = image.SCALE(bmp, 1.0, 1.0)
     ASSERT(EQ(image.WIDTH(scaled), image.WIDTH(bmp)))
     ASSERT(EQ(image.HEIGHT(scaled), image.HEIGHT(bmp)))
     DEL(scaled)
@@ -336,7 +337,7 @@ FUNC STDLIB_TESTS():INT{
     DEL(crop_same)
 
     # SCALE with factor 2 (binary 10) doubles dimensions
-    TNS: scaled2 = image.SCALE(bmp, 10, 10, 1)
+    TNS: scaled2 = image.SCALE(bmp, 10.0, 10.0)
     ASSERT(EQ(image.WIDTH(scaled2), MUL(image.WIDTH(bmp), 10)))
     ASSERT(EQ(image.HEIGHT(scaled2), MUL(image.HEIGHT(bmp), 10)))
     DEL(scaled2)
@@ -476,6 +477,27 @@ FUNC STDLIB_TESTS():INT{
     DEL(th_canvas)
 
     PRINT("Image library tests passed.")
+    # GUI tests: only run on Windows to avoid opening windows on CI/non-GUI hosts
+    IF(EQ(OS(), "win")){
+        INT: ghandle = gui.CREATE_WINDOW("scaled", 1100100, 111100, "Test GUI", 1)
+        ASSERT( GT(ghandle, 0) )
+
+        # Verify reported dimensions are positive (DPI/decoration may alter exact size)
+        ASSERT( GT(gui.WINDOW_WIDTH(ghandle), 0) )
+        ASSERT( GT(gui.WINDOW_HEIGHT(ghandle), 0) )
+
+        # Window state operations
+        ASSERT( EQ(gui.MINIMIZE(ghandle), 1) )
+        ASSERT( EQ(gui.MAXIMIZE(ghandle), 1) )
+        ASSERT( EQ(gui.TO_FRONT(ghandle), 1) )
+        ASSERT( EQ(gui.TO_BACK(ghandle), 1) )
+
+        ASSERT( EQ(gui.CLOSE_WINDOW(ghandle), 1) )
+        DEL(ghandle)
+        PRINT("GUI tests passed.")
+    } ELSE {
+        PRINT("Skipping GUI tests on non-Windows host.")
+    }
     PRINT()
     RETURN(0)
 }

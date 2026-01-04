@@ -33,7 +33,7 @@
 # FLIP_V(TNS: img):TNS
 # FLIP_H(TNS: img):TNS
 # INVERT(TNS: img):TNS
-# SCALE(TNS: src, INT: scale_x, INT: scale_y, INT: antialiasing = 1):TNS
+# SCALE(TNS: src, FLT: scale_x, FLT: scale_y, INT: antialiasing = 1):TNS
 # RESIZE(TNS: img, INT: new_width, INT: new_height, INT: antialiasing = 1):TNS
 # CROP(TNS:img, TNS:corners[[tl_x,tl_y],[tr_x,tr_y],[bl_x,bl_y],[br_x,br_y]]):TNS
 # ROTATE(TNS: img, FLT: degrees):TNS

@@ -162,8 +162,10 @@ def _resize_image_int(img_int: np.ndarray, target_w: int, target_h: int, *, anti
 
         x0g, y0g = np.meshgrid(x0, y0, indexing="ij")
         x1g, y1g = np.meshgrid(x1, y1, indexing="ij")
-        wx0g, wxg = np.meshgrid(wx0, wx, indexing="ij")
-        wy0g, wyg = np.meshgrid(wy0, wy, indexing="ij")
+        # Build weight grids aligned to (target_w, target_h)
+        wxg, wyg = np.meshgrid(wx, wy, indexing="ij")
+        wx0g = 1.0 - wxg
+        wy0g = 1.0 - wyg
 
         v00 = src[x0g, y0g]
         v10 = src[x1g, y0g]
@@ -589,8 +591,11 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
     if len(args) < 3:
         raise ASMRuntimeError("SCALE expects at least 3 arguments", location=location, rewrite_rule="SCALE")
     src = interpreter._expect_tns(args[0], "SCALE", location)
-    target_w = interpreter._expect_int(args[1], "SCALE", location)
-    target_h = interpreter._expect_int(args[2], "SCALE", location)
+    # scale_x/scale_y are floating-point values (FLT). They may be
+    # treated as multiplicative factors when small, or as absolute
+    # target dimensions otherwise. Use floor when converting to ints.
+    scale_x = interpreter._expect_flt(args[1], "SCALE", location)
+    scale_y = interpreter._expect_flt(args[2], "SCALE", location)
     antialiasing = 1
     if len(args) >= 4:
         antialiasing = interpreter._expect_int(args[3], "SCALE", location)
@@ -604,11 +609,15 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
     #   identity behavior, so treat small values as factors.
     src_w, src_h, _ = src.shape
     # If both provided values are small (<=8), treat them as scale factors.
-    use_factors = (abs(target_w) <= 8 and abs(target_h) <= 8)
+    use_factors = (abs(scale_x) <= 8 and abs(scale_y) <= 8)
     if use_factors:
-        # scale factors are integer multipliers (1 => identity)
-        target_w = int(round(src_w * float(target_w)))
-        target_h = int(round(src_h * float(target_h)))
+        # scale factors are multiplicative; compute floor of resulting sizes
+        target_w = int(math.floor(src_w * float(scale_x)))
+        target_h = int(math.floor(src_h * float(scale_y)))
+    else:
+        # treat provided values as absolute (possibly fractional) sizes
+        target_w = int(math.floor(float(scale_x)))
+        target_h = int(math.floor(float(scale_y)))
 
     if target_w <= 0 or target_h <= 0:
         raise ASMRuntimeError("SCALE target dimensions must be positive", location=location, rewrite_rule="SCALE")
@@ -2158,7 +2167,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ext.register_operator("BLIT", 4, 5, _op_blit, doc="BLIT(TNS:src, TNS:dest, INT:x, INT:y, INT:mixalpha=1):TNS")
     ext.register_operator("ELLIPSE", 6, 8, _op_ellipse, doc="ELLIPSE(TNS:img, INT:cx, INT:cy, INT:rx, INT:ry, TNS:color[r,g,b,a], INT:fill=1, INT:thickness=1) -> TNS")
     ext.register_operator("POLYGON", 3, 5, _op_polygon, doc="POLYGON(TNS:img, TNS:points[[x,y]...], TNS:color[r,g,b,a], INT:fill=1, INT:thickness=1) -> TNS")
-    ext.register_operator("SCALE", 3, 4, _op_scale, doc="SCALE(TNS:src, INT:scale_x, INT:scale_y, INT:antialiasing=1):TNS")
+    ext.register_operator("SCALE", 3, 4, _op_scale, doc="SCALE(TNS:src, FLT:scale_x, FLT:scale_y, INT:antialiasing=1):TNS")
     ext.register_operator("CROP", 2, 2, _op_crop, doc="CROP(TNS:img, TNS:corners[[tl_x,tl_y],[tr_x,tr_y],[bl_x,bl_y],[br_x,br_y]]):TNS")
     ext.register_operator("ROTATE", 2, 2, _op_rotate, doc="ROTATE(TNS:img, FLT:degrees):TNS")
     ext.register_operator("GRAYSCALE", 1, 1, _op_grayscale, doc="GRAYSCALE(TNS:img):TNS (rgb channels set to luminance, alpha preserved)")

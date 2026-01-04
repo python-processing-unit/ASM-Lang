@@ -134,7 +134,9 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
 
         py_args = []
         for i, code in enumerate(arg_codes):
-            if 4 + i >= len(args) + 4:  # guard; not strictly necessary
+            # If there aren't enough provided args for the declared arg codes,
+            # stop consuming. (Fix off-by-4 error: compare against len(args)).
+            if 4 + i >= len(args):
                 break
             # arguments beyond the 4th are at index 4+i
             raw = args[4 + i].value if hasattr(args[4 + i], "value") else args[4 + i]
