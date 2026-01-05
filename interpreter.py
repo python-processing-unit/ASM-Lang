@@ -523,7 +523,7 @@ class Builtins:
         self._register_custom("CONV", 2, 2, self._convolve)
         self._register_custom("FLIP", 1, 1, self._flip)
         self._register_custom("TFLIP", 2, 2, self._tflip)
-        self._register_custom("SCATTER", 3, 3, self._scatter)
+        self._register_custom("SCAT", 3, 3, self._scatter)
         self._register_custom("PARALLEL", 1, None, self._parallel)
 
     def _register_int_only(self, name: str, arity: int, func: Callable[..., int]) -> None:
@@ -2966,36 +2966,36 @@ class Builtins:
         ___: Environment,
         location: SourceLocation,
     ) -> Value:
-        """SCATTER(TNS: src, TNS: dst, TNS: ind):TNS
+        """SCAT(TNS: src, TNS: dst, TNS: ind):TNS
 
         Copy `src` into a slice of `dst` defined by per-dimension [lo, hi] pairs.
         Returns a new tensor shaped like `dst` with the slice replaced.
         """
 
-        src = self._expect_tns(args[0], "SCATTER", location)
-        dst = self._expect_tns(args[1], "SCATTER", location)
-        ind = self._expect_tns(args[2], "SCATTER", location)
+        src = self._expect_tns(args[0], "SCAT", location)
+        dst = self._expect_tns(args[1], "SCAT", location)
+        ind = self._expect_tns(args[2], "SCAT", location)
 
         rank = len(dst.shape)
         if len(src.shape) != rank:
-            raise ASMRuntimeError("SCATTER requires src and dst to have the same rank", location=location, rewrite_rule="SCATTER")
+            raise ASMRuntimeError("SCAT requires src and dst to have the same rank", location=location, rewrite_rule="SCAT")
         if len(ind.shape) != 2 or ind.shape[0] != rank or ind.shape[1] != 2:
-            raise ASMRuntimeError("SCATTER indices must have shape [rank, 2]", location=location, rewrite_rule="SCATTER")
+            raise ASMRuntimeError("SCAT indices must have shape [rank, 2]", location=location, rewrite_rule="SCAT")
 
         pairs = ind.data.reshape((ind.shape[0], ind.shape[1]))
         slices: List[Tuple[int, int]] = []
 
         for axis in range(rank):
-            lo_raw = self._expect_int(pairs[axis, 0], "SCATTER", location)
-            hi_raw = self._expect_int(pairs[axis, 1], "SCATTER", location)
+            lo_raw = self._expect_int(pairs[axis, 0], "SCAT", location)
+            hi_raw = self._expect_int(pairs[axis, 1], "SCAT", location)
             dim_len = dst.shape[axis]
-            lo = self._resolve_tensor_index(lo_raw, dim_len, "SCATTER", location)
-            hi = self._resolve_tensor_index(hi_raw, dim_len, "SCATTER", location)
+            lo = self._resolve_tensor_index(lo_raw, dim_len, "SCAT", location)
+            hi = self._resolve_tensor_index(hi_raw, dim_len, "SCAT", location)
             if lo > hi:
-                raise ASMRuntimeError("SCATTER expects lo <= hi for each dimension", location=location, rewrite_rule="SCATTER")
+                raise ASMRuntimeError("SCAT expects lo <= hi for each dimension", location=location, rewrite_rule="SCAT")
             span = hi - lo + 1
             if span != src.shape[axis]:
-                raise ASMRuntimeError("SCATTER source shape must match index span", location=location, rewrite_rule="SCATTER")
+                raise ASMRuntimeError("SCAT source shape must match index span", location=location, rewrite_rule="SCAT")
             slices.append((lo - 1, hi))
 
         out_data = dst.data.copy()

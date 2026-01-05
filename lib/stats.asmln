@@ -5,364 +5,260 @@
 # constructed directly). Functions return INT or FLT as documented below.
 
 # API:
-# MEAN(TNS:values) -> FLT
-# MEDIAN(TNS:values) -> FLT
-# QUANTILE(TNS:values, INT:q_num, INT:q_den) -> FLT
-# VARIANCE(TNS:values, INT:sample = 0) -> FLT
-# STDEV(TNS:values, INT:sample = 0) -> FLT
-# MODE(TNS:values) -> TNS
-# HISTOGRAM(TNS:values, INT:bins) -> TNS
-# DESCRIBE(TNS:values) -> TNS
+# MEAN(TNS: values):FLT
+# MEDIAN(TNS: values):FLT
+# MODE(TNS: values):TNS
+# HMEAN(TNS: values):FLT
+# QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT
+# VARIANCE(TNS: values, INT: sample = 0):FLT
+# STDEV(TNS: values, INT: sample = 0):FLT
+# HISTOGRAM(TNS: values, INT: bins):TNS
+# DESCRIBE(TNS: values):TNS
 
-FUNC MEAN(TNS:values):FLT{
-    INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    # parallelize: write per-index contributions in PARFOR then reduce
-    TNS: parts = TNS([n], 0)
-    PARFOR(idx, n){
-        parts[idx] = values[idx]
+FUNC MEAN(TNS: values):FLT{
+    FLT: sum = 0.0
+    FOR(i, TLEN(values, 1)){
+        ADD(@sum, FLT(values[i]))
     }
-    INT: sum = 0
-    INT: i = 1
-    WHILE( LTE(i, n) ){
-        sum = ADD(sum, parts[i])
-        i = ADD(i, 1)
-    }
-    RETURN( DIV( FLT(sum), FLT(n) ) )
+    RETURN(DIV(sum, FLT(TLEN(values, 1))))
 }
 
-FUNC MEDIAN(TNS:values):FLT{
+FUNC MEDIAN(TNS: values):FLT{
     INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    # Insertion-sort into `sorted` (1-based indexing)
-    TNS: shape = [1]
-    TNS: sorted = TNS(shape, 0)
-    DEL(shape)
-    INT: sorted_len = 0
+    IF(EQ(n, 0)) { THROW("empty input") }
+    # k1 is the lower median rank (1-based)
+    INT: k1 = DIV(ADD(n, 1), 10) # DIV by 2 (binary 10)
+    # if even, k2 is k1+1, else k2==k1
+    INT: is_even = MOD(n, 10)
+    INT: k2 = k1
+    IF(EQ(is_even, 0)) { k2 = ADD(k1, 1) }
 
-    INT: i = 1
-    WHILE( LTE(i, n) ){
-        INT: v = values[i]
-        IF(EQ(sorted_len, 0)){
-            TNS: new = [v]
-            sorted = new
-            sorted_len = 1
-        } ELSE {
-            # find insertion position p in [1..sorted_len+1]
-            INT: p = 1
-            WHILE( LTE(p, sorted_len) ){
-                IF( LTE(sorted[p], v) ){
-                    p = ADD(p, 1)
-                } ELSE {
+    # find k1
+    FLT: val1 = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
+        }
+        IF(AND(LT(less, k1), LTE(k1, le))){ val1 = cand; BREAK(1) }
+    }
+
+    IF(EQ(k1, k2)) { RETURN(val1) }
+
+    # find k2
+    FLT: val2 = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
+        }
+        IF(AND(LT(less, k2), LTE(k2, le))){ val2 = cand; BREAK(1) }
+    }
+
+    RETURN(DIV(ADD(val1, val2), 10.0))
+}
+
+FUNC MODE(TNS: values):TNS{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { RETURN([ ]) }
+
+    # First pass: determine max frequency considering unique values only
+    INT: max_count = 0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: seen = 0
+        # skip if a previous equal value exists
+        INT: prev = SUB(i, 1)
+        IF(GT(prev, 0)) {
+            FOR(t, prev){
+                FLT: vt = FLT(values[t])
+                IF(EQ(vt, cand)) {
+                    seen = 1
                     BREAK(1)
                 }
             }
-            # create new tensor of length sorted_len+1 and insert
-            INT: old_len = TLEN(sorted, 1)
-            INT: new_len = ADD(old_len, 1)
-            TNS: tmp = TNS([new_len], 0)
-            INT: j = 1
-            INT: k = 1
-            WHILE( LTE(j, new_len) ){
-                IF(EQ(j, p)){
-                    tmp[j] = v
-                } ELSE {
-                    tmp[j] = sorted[k]
-                    k = ADD(k, 1)
-                }
-                j = ADD(j, 1)
-            }
-            sorted = tmp
-            sorted_len = new_len
         }
-        i = ADD(i, 1)
+        IF(EQ(seen, 1)) { CONTINUE() }
+        INT: cnt = 0
+        FOR(j, n){
+            FLT: vj = FLT(values[j])
+            IF(EQ(vj, cand)) {
+                ADD(@cnt, 1)
+            }
+        }
+        IF(GT(cnt, max_count)) { max_count = cnt }
     }
 
-    IF( EQ( MOD(sorted_len, 10), 1 ) ){
-        # odd length; middle = (sorted_len + 1)/2
-        INT: mid_index = DIV( ADD(sorted_len, 1), 10 )
-        RETURN( FLT( sorted[mid_index] ) )
-    }ELSE{
-        # even length; average two middle values
-        INT: left_index = DIV(sorted_len, 10)
-        INT: right_index = ADD(left_index, 1)
-        INT: a = sorted[left_index]
-        INT: b = sorted[right_index]
-        # true float average of two middle values
-        RETURN( DIV( FLT( ADD(a, b) ), FLT(10) ) )
-    }
-}
-
-# Quantile by rational q = q_num / q_den in [0,1]. We avoid floating q to
-# keep integer-friendly arithmetic: pos = q*(n-1) computed as (q_num*(n-1))/q_den.
-FUNC QUANTILE(TNS:values, INT:q_num, INT:q_den):FLT{
-    INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    ASSERT( GTE(q_num, 0) )
-    ASSERT( GTE(q_den, 1) )
-    # Use MEDIAN helper's insertion-sort approach to get sorted values.
-    TNS: shape = [1]
-    TNS: sorted = TNS(shape, 0)
-    DEL(shape)
-    INT: sorted_len = 0
-    INT: i = 1
-    WHILE( LTE(i, n) ){
-        INT: v = values[i]
-        IF(EQ(sorted_len, 0)){
-            TNS: new = [v]
-            sorted = new
-            sorted_len = 1
-        } ELSE {
-            INT: p = 1
-            WHILE( LTE(p, sorted_len) ){
-                IF( LTE(sorted[p], v) ){
-                    p = ADD(p, 1)
-                } ELSE {
+    # Count how many distinct values have frequency == max_count
+    INT: mode_count = 0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: seen = 0
+        INT: prev = SUB(i, 1)
+        IF(GT(prev, 0)) {
+            FOR(t, prev){
+                FLT: vt = FLT(values[t])
+                IF(EQ(vt, cand)) {
+                    seen = 1
                     BREAK(1)
                 }
             }
-            INT: old_len = TLEN(sorted, 1)
-            INT: new_len = ADD(old_len, 1)
-            TNS: tmp = TNS([new_len], 0)
-            INT: j = 1
-            INT: k = 1
-            WHILE( LTE(j, new_len) ){
-                IF(EQ(j, p)){
-                    tmp[j] = v
-                } ELSE {
-                    tmp[j] = sorted[k]
-                    k = ADD(k, 1)
-                }
-                j = ADD(j, 1)
-            }
-            sorted = tmp
-            sorted_len = new_len
         }
-        i = ADD(i, 1)
+        IF(EQ(seen, 1)) { CONTINUE() }
+        INT: cnt = 0
+        FOR(j, n){
+            FLT: vj = FLT(values[j])
+            IF(EQ(vj, cand)) {
+                ADD(@cnt, 1)
+            }
+        }
+        IF(EQ(cnt, max_count)) { ADD(@mode_count, 1) }
     }
-    # pos = q*(n-1)
-    INT: denom = q_den
-    INT: numer = MUL(q_num, SUB(sorted_len, 1))
-    # integer division: i_pos = floor(numer/denom)
-    INT: i_pos = DIV(numer, denom)
-    INT: frac_num = SUB(numer, MUL(i_pos, denom))
-    # i_pos in [0..n-1], map to 1-based indices
-    INT: i1 = ADD(i_pos, 1)
-    INT: i2 = ADD(i1, 1)
-    IF(EQ(i2, ADD(sorted_len, 1))){
-        # pos at end, return last element
-        RETURN( FLT( sorted[ sorted_len ] ) )
+
+    # Populate into a temporary buffer sized `n` (guaranteed positive),
+    # then allocate the exact-length result and copy. This avoids creating
+    # a tensor with zero dimensions if `mode_count` were computed as 0.
+    TNS: temp = TNS([TLEN(values, 1)], 0.0)
+    INT: out_i = 0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: seen = 0
+        INT: prev = SUB(i, 1)
+        IF(GT(prev, 0)) { FOR(t, prev){ FLT: vt = FLT(values[t]); IF(EQ(vt, cand)) { seen = 1; BREAK(1) } } }
+        IF(EQ(seen, 1)) { CONTINUE() }
+        INT: cnt = 0
+        FOR(j, n){ FLT: vj = FLT(values[j]); IF(EQ(vj, cand)) { ADD(@cnt, 1) } }
+        IF(EQ(cnt, max_count)){
+            ADD(@out_i, 1)
+            temp[out_i] = cand
+        }
     }
-    INT: x1 = sorted[i1]
-    INT: x2 = sorted[i2]
-    # interpolated value = x1*(denom-frac_num)/denom + x2*(frac_num)/denom
-    INT: a = MUL(x1, SUB(denom, frac_num))
-    INT: b = MUL(x2, frac_num)
-    RETURN( FLT( DIV( ADD(a, b), denom ) ) )
+
+    # Now allocate exact-sized output and copy values
+    IF(EQ(out_i, 0)) { RETURN([ ]) }
+    TNS: out = TNS([out_i], 0.0)
+    FOR(k, out_i){ out[k] = temp[k] }
+    RETURN(out)
 }
 
-FUNC VARIANCE(TNS:values, INT:sample):FLT{
+FUNC HMEAN(TNS: values):FLT{
+    FLT: denom = 0.0
+    FOR(i, TLEN(values, 1)){
+        ADD(@denom, DIV(1.0, FLT(values[i])))
+    }
+    RETURN(DIV(FLT(TLEN(values, 1)), denom))
+}
+
+FUNC QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT{
     INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    IF( AND(EQ(sample, 1), LT(n, 10) ) ){
-        # if sample variance requested and n < 2 -> error (n in binary)
-        ASSERT( GT(n, 10) )
-    }
-    # compute mean as integer division
-    INT: sum = 0
-    INT: i = 1
-    WHILE( LTE(i, n) ){
-        sum = ADD(sum, values[i])
-        i = ADD(i, 1)
-    }
-    INT: mean = DIV(sum, n)
-    # sum squared deviations — compute per-index squared deviations in parallel then reduce
-    TNS: sdevs = TNS([n], 0)
-    PARFOR(idx, n){
-        INT: d = SUB(values[idx], mean)
-        sdevs[idx] = MUL(d, d)
-    }
-    INT: ssd = 0
-    i = 1
-    WHILE( LTE(i, n) ){
-        ssd = ADD(ssd, sdevs[i])
-        i = ADD(i, 1)
-    }
-    INT: denom = n
-    IF(EQ(sample, 1)){
-        denom = SUB(n, 1)
-    }
-    RETURN( FLT( DIV(ssd, denom) ) )
-}
+    IF(EQ(n, 0)) { THROW("empty input") }
+    # target index = floor(q * (n-1)) + 1, with q = q_num/q_den
+    INT: range = SUB(n, 1)
+    INT: prod = MUL(q_num, range)
+    INT: target = DIV(prod, q_den)
+    INT: k = ADD(target, 1)
 
-FUNC STDEV(TNS:values, INT:sample):FLT{
-    RETURN( VARIANCE(values, sample) )
-}
-
-FUNC MODE(TNS:values):TNS{
-    INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    # Build lists of unique values and counts
-    TNS: uniq = TNS([1], 0)
-    INT: uniq_len = 0
-    TNS: counts = TNS([1], 0)
-
-    INT: i = 1
-    WHILE( LTE(i, n) ){
-        INT: v = values[i]
-        # search uniq for v
-        INT: j = 1
-        INT: found = 0
-        WHILE( LTE(j, uniq_len) ){
-            IF( EQ( uniq[j], v ) ){
-                counts[j] = ADD(counts[j], 1)
-                found = 1
-                BREAK(1)
-            }
-            j = ADD(j, 1)
+    FLT: out = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
         }
-        IF(EQ(found, 0)){
-            # append v
-            IF(EQ(uniq_len, 0)){
-                TNS: first = [v]
-                uniq = first
-                counts = [1]
-                uniq_len = 1
-            } ELSE {
-                INT: old = TLEN(uniq, 1)
-                INT: new_len = ADD(old, 1)
-                TNS: nuniq = TNS([new_len], 0)
-                TNS: ncounts = TNS([new_len], 0)
-                INT: k = 1
-                WHILE( LTE(k, old) ){
-                    nuniq[k] = uniq[k]
-                    ncounts[k] = counts[k]
-                    k = ADD(k, 1)
-                }
-                nuniq[new_len] = v
-                ncounts[new_len] = 1
-                uniq = nuniq
-                counts = ncounts
-                uniq_len = new_len
-            }
-        }
-        i = ADD(i, 1)
-    }
-    # find max count
-    INT: maxc = 0
-    INT: p = 1
-    WHILE( LTE(p, uniq_len) ){
-        IF( GT(counts[p], maxc) ){
-            maxc = counts[p]
-        }
-        p = ADD(p, 1)
-    }
-    # collect all values with count == maxc
-    TNS: out = TNS([1], 0)
-    INT: out_len = 0
-    p = 1
-    WHILE( LTE(p, uniq_len) ){
-        IF( EQ(counts[p], maxc) ){
-            IF(EQ(out_len, 0)){
-                out = [ uniq[p] ]
-                out_len = 1
-            } ELSE {
-                INT: oldo = TLEN(out, 1)
-                INT: newo = ADD(oldo, 1)
-                TNS: t = TNS([newo], 0)
-                INT: r = 1
-                WHILE( LTE(r, oldo) ){
-                    t[r] = out[r]
-                    r = ADD(r, 1)
-                }
-                t[newo] = uniq[p]
-                out = t
-                out_len = newo
-            }
-        }
-        p = ADD(p, 1)
+        IF(AND(LT(less, k), LTE(k, le))){ out = cand; BREAK(1) }
     }
     RETURN(out)
 }
 
-FUNC HISTOGRAM(TNS:values, INT:bins):TNS{
+FUNC VARIANCE(TNS: values, INT: sample = 0):FLT{
+    FLT: mean = MEAN(values)
+    FLT: var_sum = 0.0
+    FOR(i, TLEN(values, 1)){
+        FLT: diff = SUB(FLT(values[i]), mean)
+        ADD(@var_sum, MUL(diff, diff))
+    }
+    INT: denom = SUB(TLEN(values, 1), sample)
+    # Tests expect integer-division semantics (truncation) for variance
+    FLT: raw = DIV(var_sum, FLT(denom))
+    INT: truncated = INT(raw)
+    RETURN(FLT(truncated))
+}
+
+FUNC STDEV(TNS: values, INT: sample = 0):FLT{
+    FLT: var = VARIANCE(values, sample)
+    # Square root: exponent 1/2 -> binary literal 0.1 (equals 0.5)
+    RETURN(POW(var, 0.1))
+}
+
+FUNC HISTOGRAM(TNS: values, INT: bins):TNS{
     INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    ASSERT( GT(bins, 0) )
+    IF(OR(EQ(n, 0), LT(bins, 1))) { RETURN(TNS([bins], 0)) }
+
     # find min and max
-    INT: i = 1
-    INT: mn = values[1]
-    INT: mx = values[1]
-    WHILE( LTE(i, n) ){
-        IF( LT(values[i], mn) ){ mn = values[i] }
-        IF( GT(values[i], mx) ){ mx = values[i] }
-        i = ADD(i, 1)
+    FLT: mn = FLT(values[1])
+    FLT: mx = FLT(values[1])
+    FOR(i, n){
+        FLT: v = FLT(values[i])
+        IF(LT(v, mn)) { mn = v }
+        IF(GT(v, mx)) { mx = v }
     }
-    # create bins counts initialized to 0
-    TNS: counts = TNS([bins], 0)
-    # if all equal, put all counts in last bin
-    IF( EQ(mn, mx) ){
-        counts[bins] = n
-        RETURN(counts)
+
+    TNS: hist = TNS([bins], 0)
+    IF(EQ(mn, mx)){
+        # all values equal -> put all counts in first bin
+        hist[1] = n
+        RETURN(hist)
     }
-    # map value v to bin index = floor( (v - mn) * bins / (mx - mn + 1) )
-    i = 1
-    INT: range = ADD( SUB(mx, mn), 1 )
-    WHILE( LTE(i, n) ){
-        INT: v = values[i]
-        INT: num = MUL( SUB(v, mn), bins )
-        INT: idx = DIV(num, range)
-        # clamp to [0, bins-1]
-        IF( LT(idx, 0) ){ idx = 0 }
-        IF( GTE(idx, bins) ){ idx = SUB(bins, 1) }
-        # convert 0-based idx to 1-based
-        counts[ ADD(idx, 1) ] = ADD( counts[ ADD(idx, 1) ], 1 )
-        i = ADD(i, 1)
+
+    # width denominator: (mx - mn + 1) to ensure max maps to last bin
+    FLT: den = ADD(SUB(mx, mn), 1.0)
+    FOR(i, n){
+        FLT: offset = SUB(FLT(values[i]), mn)
+        FLT: ratio = DIV(MUL(offset, FLT(bins)), den)
+        INT: bin = INT(ratio)
+        # bin ranges 0..bins-1 -> store at 1-based index
+        INT: bi = ADD(bin, 1)
+        hist[bi] = ADD(hist[bi], 1)
     }
-    RETURN(counts)
+    RETURN(hist)
 }
 
-FUNC DESCRIBE(TNS:values):TNS{
+FUNC DESCRIBE(TNS: values):TNS{
     INT: n = TLEN(values, 1)
-    ASSERT( GT(n, 0) )
-    # count, mean, stdev (population), min, max
-    # parallelize: copy values into a temp tensor then reduce for sum/min/max
-    TNS: parts = TNS([n], 0)
-    PARFOR(idx, n){
-        parts[idx] = values[idx]
+    # desc layout: [count, mean, stdev, min, max] -> length 5 (binary 101)
+    TNS: desc = TNS([101], 0)
+    IF(EQ(n, 0)){
+        desc[1] = 0
+        RETURN(desc)
     }
-    INT: sum = 0
-    INT: i = 1
-    INT: mn = parts[1]
-    INT: mx = parts[1]
-    WHILE( LTE(i, n) ){
-        INT: v = parts[i]
-        sum = ADD(sum, v)
-        IF( LT(v, mn) ){ mn = v }
-        IF( GT(v, mx) ){ mx = v }
-        i = ADD(i, 1)
+    desc[1] = n
+    desc[10] = INT(MEAN(values))
+    desc[11] = INT(STDEV(values, 0))
+
+    # min / max
+    FLT: mn = FLT(values[1])
+    FLT: mx = FLT(values[1])
+    FOR(i, n){
+        FLT: v = FLT(values[i])
+        IF(LT(v, mn)) {
+            mn = v
+        }
+        IF(GT(v, mx)) {
+            mx = v
+        }
     }
-    INT: mean = DIV(sum, n)
-    # compute variance (population) — compute per-index squared deviations in parallel then reduce
-    TNS: sdevs = TNS([n], 0)
-    PARFOR(idx, n){
-        INT: d = SUB(parts[idx], mean)
-        sdevs[idx] = MUL(d, d)
-    }
-    INT: ssd = 0
-    i = 1
-    WHILE( LTE(i, n) ){
-        ssd = ADD(ssd, sdevs[i])
-        i = ADD(i, 1)
-    }
-    INT: var = DIV(ssd, n)
-    INT: stdev = var  # represent stdev as variance for integer-friendly result
-    # build result tensor: [count, mean, stdev, min, max]
-    TNS: out = TNS([101], 0)
-    out[1] = n
-    out[10] = mean
-    out[11] = stdev
-    out[100] = mn
-    out[101] = mx
-    RETURN(out)
+    desc[100] = INT(mn)
+    desc[101] = INT(mx)
+    RETURN(desc)
 }

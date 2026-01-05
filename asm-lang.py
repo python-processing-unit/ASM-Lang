@@ -60,10 +60,19 @@ def run_repl(*, verbose: bool, services) -> int:
     print("\x1b[38;2;153;221;255mASM-Lang\033[0m REPL. Enter statements, blank line to run buffer.") # "ASM-Lang" in light blue
     # Use "<repl>" as the REPL's effective source filename so that MAIN() and imports behave
     had_output = False
+    # Tracks whether any PRINT has occurred since the last REPL input.
+    first_print_since_input = True
+
     def _output_sink(text: str) -> None:
-        nonlocal had_output
+        nonlocal had_output, first_print_since_input
+        # If this is not the first PRINT since the last REPL input,
+        # emit a leading newline so outputs appear on separate lines.
+        if not first_print_since_input:
+            print()
+        first_print_since_input = False
         had_output = True
-        print(text, end="")
+        # Print the text without appending a trailing newline.
+        print(text, end="", flush=True)
 
     picked = services.hook_registry.pick_repl() if services is not None else None
     if picked is not None:
@@ -119,6 +128,10 @@ def run_repl(*, verbose: bool, services) -> int:
         except EOFError:
             print()
             break
+
+        # Reset per-input PRINT tracking so the next PRINT is treated as
+        # the first since this REPL input.
+        first_print_since_input = True
 
         stripped = line.strip()
 

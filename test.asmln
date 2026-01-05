@@ -23,13 +23,18 @@ FUNC STDLIB_TESTS():INT{
     PRINT("PRNG tests passed.")
 
     # CSPRNG reproducibility (ChaCha-based)
-    csprng.CS_PRNG_SEED(101)  # seed = 5
-    INT: x = csprng.CS_PRNG_NEXT()
-    csprng.CS_PRNG_SEED(101)
-    INT: y = csprng.CS_PRNG_NEXT()
+    csprng.SEED(101)  # seed = 5
+    INT: x = csprng.NEXT()
+    csprng.SEED(101)
+    INT: y = csprng.NEXT()
     ASSERT( EQ(x, y) )
     DEL(x)
     DEL(y)
+    INT: ran = csprng.RANGE(10000)
+    ASSERT( AND( GTE(ran, 0), LTE(ran, 10000) ) )
+    DEL(ran)
+    INT: ran2 = csprng.RANGE_MIN_MAX(1000, 10000)
+    ASSERT( AND( GTE(ran2, 1000), LTE(ran2, 10000) ) )
     PRINT("CSPRNG tests passed.")
 
     # Prime library tests
