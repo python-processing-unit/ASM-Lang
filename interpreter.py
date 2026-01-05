@@ -18,6 +18,7 @@ from lexer import ASMError, ASMParseError, Lexer
 from extensions import ASMExtensionError, HookRegistry, RuntimeServices, StepContext, TypeContext, TypeRegistry, TypeSpec, build_default_services
 from parser import (
     Assignment,
+    Declaration,
     Block,
     BreakStatement,
     CallArgument,
@@ -27,6 +28,7 @@ from parser import (
     ForStatement,
     ParForStatement,
     FuncDef,
+    LambdaExpression,
     AsyncStatement,
     GotoStatement,
     GotopointStatement,
@@ -152,6 +154,8 @@ class JumpSignal(Exception):
 class Environment:
     parent: Optional["Environment"] = None
     values: Dict[str, Value] = field(default_factory=dict)
+    # declared but unassigned symbol types
+    declared: Dict[str, str] = field(default_factory=dict)
     frozen: set = field(default_factory=set)
     permafrozen: set = field(default_factory=set)
 
@@ -213,16 +217,56 @@ class Environment:
             found_env.values[name] = value
             return
 
+        # No existing value binding found. Look for a prior type declaration
+        # in this environment chain.
+        decl_env: Optional[Environment] = None
+        decl_type: Optional[str] = None
+        env2: Optional[Environment] = self
+        while env2 is not None:
+            if name in env2.declared:
+                decl_env = env2
+                decl_type = env2.declared[name]
+                break
+            env2 = env2.parent
+
         if declared_type is None:
-            raise ASMRuntimeError(
-                f"Identifier '{name}' must be declared with a type before assignment",
-                rewrite_rule="ASSIGN",
-            )
+            # Assignment without inline declaration: require a prior declaration
+            if decl_env is None:
+                raise ASMRuntimeError(
+                    f"Identifier '{name}' must be declared with a type before assignment",
+                    rewrite_rule="ASSIGN",
+                )
+            if decl_type != value.type:
+                raise ASMRuntimeError(
+                    f"Assigned value type {value.type} does not match declaration {decl_type}",
+                    rewrite_rule="ASSIGN",
+                )
+            decl_env.values[name] = value
+            return
+
+        # Assignment with inline declaration: if there is an existing declaration
+        # ensure it matches; otherwise record declaration in current env.
+        if decl_env is not None:
+            if decl_type != declared_type:
+                raise ASMRuntimeError(
+                    f"Type mismatch for '{name}': previously declared as {decl_type}",
+                    rewrite_rule="ASSIGN",
+                )
+            if declared_type != value.type:
+                raise ASMRuntimeError(
+                    f"Assigned value type {value.type} does not match declaration {declared_type}",
+                    rewrite_rule="ASSIGN",
+                )
+            decl_env.values[name] = value
+            return
+
+        # No prior declaration: record it in this environment and create the value
         if declared_type != value.type:
             raise ASMRuntimeError(
                 f"Assigned value type {value.type} does not match declaration {declared_type}",
                 rewrite_rule="ASSIGN",
             )
+        self.declared[name] = declared_type
         self.values[name] = value
 
     def get(self, name: str) -> Value:
@@ -3486,6 +3530,9 @@ class Interpreter:
         self._functions_version: int = 0
         self._call_resolution_cache: Dict[Tuple[str, str, int], Optional[str]] = {}
 
+        # Monotonic counter for anonymous lambda names (for logs/tracebacks only).
+        self._lambda_counter: int = 0
+
     def _mark_functions_changed(self) -> None:
         self._functions_version += 1
         self._call_resolution_cache.clear()
@@ -3715,6 +3762,28 @@ class Interpreter:
     def _execute_statement(self, statement: Statement, env: Environment) -> None:
         self._log_step(rule=statement.__class__.__name__, location=statement.location)
         statement_type = type(statement)
+        if statement_type is Declaration:
+            # Record a type declaration without creating a value. Do not
+            # introduce a binding; reads will still raise until the name is
+            # assigned. If a value already exists in the same environment,
+            # ensure the types match.
+            if statement.name in self.functions:
+                raise ASMRuntimeError(
+                    f"Identifier '{statement.name}' already bound as function",
+                    location=statement.location,
+                    rewrite_rule="ASSIGN",
+                )
+            env_found = env._find_env(statement.name)
+            if env_found is not None:
+                existing = env_found.values.get(statement.name)
+                if existing is not None and existing.type != statement.declared_type:
+                    raise ASMRuntimeError(
+                        f"Type mismatch for '{statement.name}': previously declared as {existing.type}",
+                        location=statement.location,
+                        rewrite_rule="ASSIGN",
+                    )
+            env.declared[statement.name] = statement.declared_type
+            return
         if statement_type is Assignment:
             if statement.target in self.functions:
                 raise ASMRuntimeError(
@@ -4496,6 +4565,27 @@ class Interpreter:
                 location=expression.location,
                 rewrite_rule="IDENT",
             )
+        if expression_type is LambdaExpression:
+            # Create an anonymous function value that closes over the current environment.
+            self._lambda_counter += 1
+            name = f"<lambda_{self._lambda_counter}>"
+            fn = Function(
+                name=name,
+                params=expression.params,
+                return_type=expression.return_type,
+                body=expression.body,
+                closure=env,
+            )
+            self._log_step(
+                rule="LAMBDA",
+                location=expression.location,
+                extra={
+                    "name": name,
+                    "params": [p.name for p in expression.params],
+                    "return_type": expression.return_type,
+                },
+            )
+            return Value(TYPE_FUNC, fn)
         if expression_type is CallExpression:
             callee_expr = expression.callee
             callee_ident = callee_expr.name if type(callee_expr) is Identifier else None

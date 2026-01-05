@@ -27,6 +27,7 @@ KEYWORDS = {
     "FOR",
     "PARFOR",
     "FUNC",
+    "LAMBDA",
     "ASYNC",
     "RETURN",
     "POP",

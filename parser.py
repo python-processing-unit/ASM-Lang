@@ -37,8 +37,15 @@ class Block(Node):
 @dataclass(slots=True)
 class Assignment(Statement):
     target: str
-    expression: "Expression"
     declared_type: Optional[str]
+
+    expression: "Expression"
+
+
+@dataclass(slots=True)
+class Declaration(Statement):
+    name: str
+    declared_type: str
 
 
 @dataclass(slots=True)
@@ -132,6 +139,13 @@ class AsyncStatement(Statement):
 
 class Expression(Node):
     pass
+
+
+@dataclass(slots=True)
+class LambdaExpression(Expression):
+    params: List["Param"]
+    return_type: str
+    body: Block
 
 
 @dataclass(slots=True)
@@ -285,10 +299,17 @@ class Parser:
         location: SourceLocation = self._location_from_token(ident)
         return Assignment(location=location, target=ident.value, expression=expr, declared_type=declared_type)
 
-    def _parse_typed_assignment(self) -> Assignment:
+    def _parse_typed_assignment(self) -> Statement:
         type_token = self._consume_type_token()
         self._consume("COLON")
-        return self._parse_assignment(type_token.value)
+        # Allow a bare type declaration (e.g. `INT: x`) which records the
+        # symbol's declared type but does not perform an assignment. If an
+        # equals follows, parse as a normal typed assignment.
+        if self._peek().type == "IDENT" and self._peek_next().type == "EQUALS":
+            return self._parse_assignment(type_token.value)
+        ident = self._consume("IDENT")
+        location: SourceLocation = self._location_from_token(type_token)
+        return Declaration(location=location, name=ident.value, declared_type=type_token.value)
 
     def _parse_index_assignment(self) -> TensorSetStatement:
         target = self._parse_index_expression()
@@ -323,6 +344,33 @@ class Parser:
         block: Block = self._parse_block()
         location: SourceLocation = self._location_from_token(keyword)
         return FuncDef(location=location, name=name_token.value, params=params, return_type=return_type.value, body=block)
+
+    def _parse_lambda(self) -> LambdaExpression:
+        keyword = self._consume("LAMBDA")
+        self._consume("LPAREN")
+        params: List[Param] = []
+        seen_default = False
+        if self._peek().type != "RPAREN":
+            while True:
+                type_token = self._consume_type_token()
+                self._consume("COLON")
+                name_tok = self._consume("IDENT")
+                default_expr: Optional[Expression] = None
+                if self._match("EQUALS"):
+                    seen_default = True
+                    default_expr = self._parse_expression()
+                elif seen_default:
+                    raise ASMParseError(
+                        f"Positional parameter cannot follow parameter with default at line {name_tok.line}")
+                params.append(Param(type=type_token.value, name=name_tok.value, default=default_expr))
+                if not self._match("COMMA"):
+                    break
+        self._consume("RPAREN")
+        self._consume("COLON")
+        return_type = self._consume_type_token()
+        block: Block = self._parse_block()
+        location: SourceLocation = self._location_from_token(keyword)
+        return LambdaExpression(location=location, params=params, return_type=return_type.value, body=block)
 
     def _parse_if(self) -> IfStatement:
         keyword = self._consume("IF")
@@ -452,6 +500,8 @@ class Parser:
             return self._parse_tensor_literal()
         if token.type == "LANGLE":
             return self._parse_map_literal()
+        if token.type == "LAMBDA":
+            return self._parse_lambda()
         if token.type == "IDENT":
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
