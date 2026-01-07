@@ -28,6 +28,7 @@ KEYWORDS = {
     "WHILE",
     "FOR",
     "PARFOR",
+    "THR",
     "FUNC",
     "LAMBDA",
     "ASYNC",

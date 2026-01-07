@@ -5,6 +5,7 @@ import argparse
 import sys
 import os
 from typing import List, Optional
+import threading
 
 from extensions import ASMExtensionError, ReplContext, load_runtime_services
 from interpreter import ASMRuntimeError, Environment, ExitSignal, Interpreter, TracebackFormatter
@@ -62,11 +63,30 @@ def run_repl(*, verbose: bool, services) -> int:
     had_output = False
     # Tracks whether any PRINT has occurred since the last REPL input.
     first_print_since_input = True
+    main_thread_id = threading.get_ident()
 
     def _output_sink(text: str) -> None:
         nonlocal had_output, first_print_since_input
         # If this is not the first PRINT since the last REPL input,
         # emit a leading newline so outputs appear on separate lines.
+        if threading.get_ident() != main_thread_id:
+            # Background-thread output: ensure it appears on its own line
+            # to avoid being glued to the prompt. Use a normal print so a
+            # trailing newline is emitted.
+            try:
+                # If not first print since input, keep the separation.
+                if not first_print_since_input:
+                    print()
+                first_print_since_input = False
+                had_output = True
+                print(text)
+            except Exception:
+                # Best-effort: swallow to avoid crashing the REPL.
+                pass
+            return
+
+        # Main-thread REPL output: keep original inline behaviour so the
+        # REPL can control newlines and prompt placement.
         if not first_print_since_input:
             print()
         first_print_since_input = False

@@ -138,6 +138,12 @@ class AsyncStatement(Statement):
 
 
 @dataclass(slots=True)
+class ThrStatement(Statement):
+    symbol: str
+    block: Block
+
+
+@dataclass(slots=True)
 class TryStatement(Statement):
     try_block: Block
     catch_symbol: Optional[str]
@@ -163,6 +169,11 @@ class TensorLiteral(Expression):
 @dataclass(slots=True)
 class MapLiteral(Expression):
     items: List[Tuple["Expression", "Expression"]]
+
+
+@dataclass(slots=True)
+class AsyncExpression(Expression):
+    block: Block
 
 
 @dataclass(slots=True)
@@ -229,7 +240,7 @@ class Parser:
         self.tokens = tokens
         self.filename = filename
         self.source_lines = source_lines
-        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS", "FUNC", "MAP"}
+        self.type_names = set(type_names) if type_names is not None else {"INT", "FLT", "STR", "TNS", "FUNC", "MAP", "THR"}
         self.index = 0
 
     def _parse_flt_literal(self, raw: str, *, token: Token) -> float:
@@ -278,6 +289,8 @@ class Parser:
             return self._parse_func()
         if token.type == "IF":
             return self._parse_if()
+        if token.type == "THR":
+            return self._parse_thr()
         if token.type == "ASYNC":
             return self._parse_async()
         if token.type == "WHILE":
@@ -464,6 +477,14 @@ class Parser:
         block: Block = self._parse_block()
         return AsyncStatement(location=self._location_from_token(keyword), block=block)
 
+    def _parse_thr(self) -> ThrStatement:
+        keyword = self._consume("THR")
+        self._consume("LPAREN")
+        ident = self._consume("IDENT")
+        self._consume("RPAREN")
+        block: Block = self._parse_block()
+        return ThrStatement(location=self._location_from_token(keyword), symbol=ident.value, block=block)
+
     def _parse_try(self) -> TryStatement:
         keyword = self._consume("TRY")
         try_block: Block = self._parse_block()
@@ -548,6 +569,8 @@ class Parser:
             return self._parse_map_literal()
         if token.type == "LAMBDA":
             return self._parse_lambda()
+        if token.type == "ASYNC":
+            return self._parse_async_expression()
         if token.type == "IDENT":
             ident: Token = self._consume("IDENT")
             location: SourceLocation = self._location_from_token(ident)
@@ -651,6 +674,11 @@ class Parser:
                     break
         self._consume("RANGLE")
         return MapLiteral(location=self._location_from_token(langle), items=items)
+
+    def _parse_async_expression(self) -> AsyncExpression:
+        keyword = self._consume("ASYNC")
+        block: Block = self._parse_block()
+        return AsyncExpression(location=self._location_from_token(keyword), block=block)
 
     def _parse_parenthesized_expression(self) -> Expression:
         self._consume("LPAREN")

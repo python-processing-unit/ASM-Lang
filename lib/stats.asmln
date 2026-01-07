@@ -16,11 +16,13 @@
 # DESCRIBE(TNS: values):TNS
 
 FUNC MEAN(TNS: values):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
     FLT: sum = 0.0
-    FOR(i, TLEN(values, 1)){
+    FOR(i, n){
         ADD(@sum, FLT(values[i]))
     }
-    RETURN(DIV(sum, FLT(TLEN(values, 1))))
+    RETURN(DIV(sum, FLT(n)))
 }
 
 FUNC MEDIAN(TNS: values):FLT{
@@ -70,91 +72,51 @@ FUNC MODE(TNS: values):TNS{
     INT: n = TLEN(values, 1)
     IF(EQ(n, 0)) { RETURN([ ]) }
 
-    # First pass: determine max frequency considering unique values only
-    INT: max_count = 0
-    FOR(i, n){
-        FLT: cand = FLT(values[i])
-        INT: seen = 0
-        # skip if a previous equal value exists
-        INT: prev = SUB(i, 1)
-        IF(GT(prev, 0)) {
-            FOR(t, prev){
-                FLT: vt = FLT(values[t])
-                IF(EQ(vt, cand)) {
-                    seen = 1
-                    BREAK(1)
-                }
+    # Count frequencies via MAP to avoid O(n^2) rescans.
+    MAP: counts = < FLT(values[1]) = 1 >
+    IF(GT(n, 1)){
+        FOR(i, SUB(n, 1)){
+            INT: idx = ADD(i, 1)
+            FLT: v = FLT(values[idx])
+            IF(KEYIN(v, counts)){
+                counts<v> = ADD(counts<v>, 1)
+            } ELSE {
+                counts<v> = 1
             }
         }
-        IF(EQ(seen, 1)) { CONTINUE() }
-        INT: cnt = 0
-        FOR(j, n){
-            FLT: vj = FLT(values[j])
-            IF(EQ(vj, cand)) {
-                ADD(@cnt, 1)
-            }
-        }
-        IF(GT(cnt, max_count)) { max_count = cnt }
     }
 
-    # Count how many distinct values have frequency == max_count
+    INT: max_count = MAX(VALUES(counts))
+    TNS: keys = KEYS(counts)
+    INT: klen = TLEN(keys, 1)
+
     INT: mode_count = 0
-    FOR(i, n){
-        FLT: cand = FLT(values[i])
-        INT: seen = 0
-        INT: prev = SUB(i, 1)
-        IF(GT(prev, 0)) {
-            FOR(t, prev){
-                FLT: vt = FLT(values[t])
-                IF(EQ(vt, cand)) {
-                    seen = 1
-                    BREAK(1)
-                }
-            }
-        }
-        IF(EQ(seen, 1)) { CONTINUE() }
-        INT: cnt = 0
-        FOR(j, n){
-            FLT: vj = FLT(values[j])
-            IF(EQ(vj, cand)) {
-                ADD(@cnt, 1)
-            }
-        }
-        IF(EQ(cnt, max_count)) { ADD(@mode_count, 1) }
+    FOR(i, klen){
+        FLT: k = FLT(keys[i])
+        IF(EQ(counts<k>, max_count)) { ADD(@mode_count, 1) }
     }
+    IF(EQ(mode_count, 0)) { RETURN([ ]) }
 
-    # Populate into a temporary buffer sized `n` (guaranteed positive),
-    # then allocate the exact-length result and copy. This avoids creating
-    # a tensor with zero dimensions if `mode_count` were computed as 0.
-    TNS: temp = TNS([TLEN(values, 1)], 0.0)
+    TNS: out = TNS([mode_count], 0.0)
     INT: out_i = 0
-    FOR(i, n){
-        FLT: cand = FLT(values[i])
-        INT: seen = 0
-        INT: prev = SUB(i, 1)
-        IF(GT(prev, 0)) { FOR(t, prev){ FLT: vt = FLT(values[t]); IF(EQ(vt, cand)) { seen = 1; BREAK(1) } } }
-        IF(EQ(seen, 1)) { CONTINUE() }
-        INT: cnt = 0
-        FOR(j, n){ FLT: vj = FLT(values[j]); IF(EQ(vj, cand)) { ADD(@cnt, 1) } }
-        IF(EQ(cnt, max_count)){
+    FOR(i, klen){
+        FLT: k = FLT(keys[i])
+        IF(EQ(counts<k>, max_count)){
             ADD(@out_i, 1)
-            temp[out_i] = cand
+            out[out_i] = k
         }
     }
-
-    # Now allocate exact-sized output and copy values
-    IF(EQ(out_i, 0)) { RETURN([ ]) }
-    TNS: out = TNS([out_i], 0.0)
-    FOR(k, out_i){ out[k] = temp[k] }
     RETURN(out)
 }
 
 FUNC HMEAN(TNS: values):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
     FLT: denom = 0.0
-    FOR(i, TLEN(values, 1)){
+    FOR(i, n){
         ADD(@denom, DIV(1.0, FLT(values[i])))
     }
-    RETURN(DIV(FLT(TLEN(values, 1)), denom))
+    RETURN(DIV(FLT(n), denom))
 }
 
 FUNC QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT{
@@ -182,13 +144,15 @@ FUNC QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT{
 }
 
 FUNC VARIANCE(TNS: values, INT: sample = 0):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
     FLT: mean = MEAN(values)
     FLT: var_sum = 0.0
-    FOR(i, TLEN(values, 1)){
+    FOR(i, n){
         FLT: diff = SUB(FLT(values[i]), mean)
         ADD(@var_sum, MUL(diff, diff))
     }
-    INT: denom = SUB(TLEN(values, 1), sample)
+    INT: denom = SUB(n, sample)
     # Tests expect integer-division semantics (truncation) for variance
     FLT: raw = DIV(var_sum, FLT(denom))
     INT: truncated = INT(raw)

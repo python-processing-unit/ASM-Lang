@@ -9,6 +9,7 @@ import tempfile
 import codecs
 import numpy as np
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from collections import OrderedDict
@@ -62,6 +63,7 @@ TYPE_STR = "STR"
 TYPE_TNS = "TNS"
 TYPE_FUNC = "FUNC"
 TYPE_MAP = "MAP"
+TYPE_THR = "THR"
 
 # On Windows, command lines over a certain length cause CreateProcess errors
 WINDOWS_COMMAND_LENGTH_LIMIT = 8000
@@ -94,6 +96,7 @@ class Map:
 class Value:
     type: str
     value: Any
+
 
 
 @dataclass(slots=True)
@@ -3646,6 +3649,115 @@ class Builtins:
         interpreter.io_log.append({"event": "EXIT", "code": code})
         raise ExitSignal(code)
 
+    # --- thread builtins ---
+    def _resolve_thr_from_value(self, interpreter: "Interpreter", val: Value, rule: str, location: SourceLocation):
+        val = interpreter._deref_value(val, location=location, rule=rule)
+        if val.type != TYPE_THR:
+            raise ASMRuntimeError(f"{rule} expects THR value", location=location, rewrite_rule=rule)
+        ctrl = val.value
+        return ctrl
+
+    def _stop_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "STOP", location)
+        thr = ctrl.get("thread")
+        if thr is None:
+            raise ASMRuntimeError("Invalid THR", location=location, rewrite_rule="STOP")
+        # Cooperative stop: mark as stopping/stopped and allow worker to exit at
+        # the next statement boundary.
+        ctrl["stop"] = True
+        ctrl["finished"] = True
+        ctrl["paused"] = False
+        try:
+            ctrl["pause_event"].set()
+        except Exception:
+            pass
+        ctrl["state"] = "stopped"
+        return Value(TYPE_THR, ctrl)
+
+    def _await_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "AWAIT", location)
+        thr = ctrl.get("thread")
+        if thr is None:
+            raise ASMRuntimeError("Invalid THR", location=location, rewrite_rule="AWAIT")
+        thr.join()
+        return Value(TYPE_THR, ctrl)
+
+    def _pause_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "PAUSE", location)
+        seconds = -1.0
+        if len(args) > 1:
+            seconds = self._expect_flt(args[1], "PAUSE", location)
+        if ctrl.get("paused"):
+            raise ASMRuntimeError("Thread already paused", location=location, rewrite_rule="PAUSE")
+        # Mark paused; threads need to check pause_event to actually pause.
+        ctrl["paused"] = True
+        ctrl["pause_event"].clear()
+        ctrl["state"] = "paused"
+        if seconds is not None and seconds >= 0:
+            def _delayed_resume():
+                time.sleep(seconds)
+                ctrl["paused"] = False
+                ctrl["pause_event"].set()
+                ctrl["state"] = "running"
+
+            threading.Thread(target=_delayed_resume, daemon=True).start()
+        return Value(TYPE_THR, ctrl)
+
+    def _resume_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "RESUME", location)
+        if not ctrl.get("paused"):
+            raise ASMRuntimeError("Thread is not paused", location=location, rewrite_rule="RESUME")
+        ctrl["paused"] = False
+        ctrl["pause_event"].set()
+        ctrl["state"] = "running"
+        return Value(TYPE_THR, ctrl)
+
+    def _paused_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "PAUSED", location)
+        return Value(TYPE_INT, 1 if ctrl.get("paused") else 0)
+
+    def _restart_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        ctrl = self._resolve_thr_from_value(interpreter, args[0], "RESTART", location)
+        # Not fully reinitializing environment; best-effort: if original env available, restart
+        env = ctrl.get("env")
+        block = ctrl.get("block")
+        if env is None or block is None:
+            raise ASMRuntimeError("Cannot restart THR", location=location, rewrite_rule="RESTART")
+        # Reset finished flag and spawn new thread
+        ctrl["stop"] = False
+        ctrl["paused"] = False
+        try:
+            ctrl["pause_event"].set()
+        except Exception:
+            pass
+        ctrl["finished"] = False
+        ctrl["state"] = "running"
+
+        def _worker_restart():
+            frame = interpreter._new_frame("<thr>", env, location)
+            interpreter._thread_ctrls[threading.get_ident()] = ctrl
+            interpreter.call_stack.append(frame)
+            try:
+                interpreter._execute_block(block.statements, env)
+            finally:
+                try:
+                    interpreter.call_stack.pop()
+                except Exception:
+                    pass
+                try:
+                    tid = threading.get_ident()
+                    if tid in interpreter._thread_ctrls:
+                        del interpreter._thread_ctrls[tid]
+                except Exception:
+                    pass
+                ctrl["finished"] = True
+                ctrl["state"] = "finished" if not ctrl.get("stop") else "stopped"
+
+        t = threading.Thread(target=_worker_restart, daemon=True)
+        ctrl["thread"] = t
+        t.start()
+        return Value(TYPE_THR, ctrl)
+
 
 class Interpreter:
     def __init__(
@@ -3670,6 +3782,11 @@ class Interpreter:
         self.input_provider = input_provider or (lambda: input(">>> "))
         self.output_sink = output_sink or (lambda text: print(text))
         self.builtins = Builtins()
+        # Pending async thread starts created during expression evaluation.
+        # ASYNC expressions create a thread controller but defer starting the
+        # worker until the enclosing call expression completes so that
+        # operators like PAUSE/STOP can act on the returned THR before it runs.
+        self._pending_async_starts: List[Dict[str, Any]] = []
 
         # Install built-in types (INT/STR/TNS) into the registry with their
         # concrete runtime behavior. These names are reserved by default
@@ -3751,6 +3868,28 @@ class Interpreter:
                 seal=True,
             )
 
+        if not self.type_registry.has(TYPE_THR):
+            # THR is truthy while running/paused, false when finished
+            def _thr_to_str(ctx: TypeContext, v: Value) -> str:
+                obj = v.value
+                state = getattr(obj, "state", "finished")
+                return f"<thr {state}>"
+
+            def _thr_cond(ctx: TypeContext, v: Value) -> int:
+                obj = v.value
+                # finished -> 0, otherwise 1
+                return 0 if getattr(obj, "finished", True) else 1
+
+            self.type_registry.register(
+                TypeSpec(
+                    name=TYPE_THR,
+                    printable=True,
+                    condition_int=_thr_cond,
+                    to_str=_thr_to_str,
+                ),
+                seal=True,
+            )
+
         if not self.type_registry.has(TYPE_FUNC):
             def _func_to_str(ctx: TypeContext, v: Value) -> str:
                 name = getattr(v.value, "name", None)
@@ -3777,6 +3916,14 @@ class Interpreter:
                 impl=impl,
             )
 
+        # Register thread-related builtins
+        self.builtins.register_extension_operator(name="STOP", min_args=1, max_args=1, impl=self.builtins._stop_thr)
+        self.builtins.register_extension_operator(name="AWAIT", min_args=1, max_args=1, impl=self.builtins._await_thr)
+        self.builtins.register_extension_operator(name="PAUSE", min_args=1, max_args=2, impl=self.builtins._pause_thr)
+        self.builtins.register_extension_operator(name="RESUME", min_args=1, max_args=1, impl=self.builtins._resume_thr)
+        self.builtins.register_extension_operator(name="PAUSED", min_args=1, max_args=1, impl=self.builtins._paused_thr)
+        self.builtins.register_extension_operator(name="RESTART", min_args=1, max_args=1, impl=self.builtins._restart_thr)
+
         self.functions: Dict[str, Function] = {}
         self.logger = StateLogger(verbose=verbose)
         self.logger.record(frame=None, location=None, statement="<seed>", rewrite_record={"rule": "SEED"})
@@ -3794,6 +3941,11 @@ class Interpreter:
         # re-registered if necessary without re-running module code.
         self.module_functions: Dict[str, List[Function]] = {}
 
+        # Threading / THR management
+        # Map from thread id (symbol name) to a small controller object
+        self._thr_lock = threading.Lock()
+        self._thrs: Dict[str, Any] = {}
+
         # Cache for resolving unqualified function calls inside module frames.
         # Keyed by (frame_name, callee_name, functions_version).
         self._functions_version: int = 0
@@ -3801,6 +3953,8 @@ class Interpreter:
 
         # Monotonic counter for anonymous lambda names (for logs/tracebacks only).
         self._lambda_counter: int = 0
+        # Map OS thread id -> controller dict for cooperative pause/inspect
+        self._thread_ctrls: Dict[int, Any] = {}
 
     def _mark_functions_changed(self) -> None:
         self._functions_version += 1
@@ -3990,6 +4144,20 @@ class Interpreter:
         while i < n_statements:
             statement = statements[i]
             emit_event("before_statement", self, statement, env)
+            # Cooperative pause: if the current OS thread has an associated
+            # controller and it is paused, block until resumed.
+            try:
+                tid = threading.get_ident()
+                ctrl = self._thread_ctrls.get(tid)
+                if ctrl is not None:
+                    # Wait while paused; pause_event is set when running.
+                    while ctrl.get("paused"):
+                        ctrl.get("pause_event").wait()
+                    # Cooperative stop: exit at statement boundary.
+                    if ctrl.get("stop"):
+                        return
+            except Exception:
+                pass
             # TryStatement is handled directly here so that catch binding
             # lifetime does not escape the following statement sequencing.
             if type(statement) is TryStatement:
@@ -4333,6 +4501,69 @@ class Interpreter:
         if statement_type is GotoStatement:
             target = self._evaluate_expression(statement.expression, env)
             raise JumpSignal(target)
+        if statement_type.__name__ == "ThrStatement":
+            # Create a named THR controller and start execution in background
+            # Bind the symbol in current env to the THR value.
+            symbol = statement.symbol  # type: ignore[attr-defined]
+            block = statement.block  # type: ignore[attr-defined]
+            loc = statement.location
+
+            ctrl = {
+                "thread": None,
+                "paused": False,
+                "pause_event": threading.Event(),
+                "finished": False,
+                "stop": False,
+                "state": "running",
+                "env": env,
+                "block": block,
+            }
+            # controller starts unpaused
+            ctrl["pause_event"].set()
+
+            def _thr_worker():
+                frame = self._new_frame(f"<thr:{symbol}>", env, loc)
+                # register ctrl for this OS thread
+                self._thread_ctrls[threading.get_ident()] = ctrl
+                self.call_stack.append(frame)
+                try:
+                    self._emit_event("thr_start", self, frame, env, symbol)
+                    try:
+                        self._execute_block(block.statements, env)
+                    except Exception as exc:
+                        try:
+                            self._emit_event("on_error", self, exc)
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        self.call_stack.pop()
+                    except Exception:
+                        pass
+                    ctrl["finished"] = True
+                    ctrl["state"] = "finished" if not ctrl.get("stop") else "stopped"
+                    try:
+                        self._emit_event("thr_end", self, frame, env, symbol)
+                    except Exception:
+                        pass
+                    # unregister ctrl
+                    try:
+                        tid = threading.get_ident()
+                        if tid in self._thread_ctrls:
+                            del self._thread_ctrls[tid]
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_thr_worker, daemon=True, name=f"asm_thr_{symbol}_{self.frame_counter}")
+            ctrl["thread"] = t
+            with self._thr_lock:
+                if symbol in self._thrs:
+                    raise ASMRuntimeError(f"THR symbol '{symbol}' already exists", location=statement.location, rewrite_rule="THR")
+                self._thrs[symbol] = ctrl
+            # Bind symbol to THR value in environment
+            env.set(symbol, Value(TYPE_THR, ctrl), declared_type="THR")
+            t.start()
+            return
         if statement_type is AsyncStatement:
             # Execute the block synchronously inside a background thread
             block = statement.block
@@ -4362,7 +4593,58 @@ class Interpreter:
                     except Exception:
                         pass
 
-            t = threading.Thread(target=_async_worker, daemon=True, name=f"asm_async_{self.frame_counter}")
+            # For compatibility, ASYNC as a statement fires and returns a THR-like
+            # controller which is ignored by statement context. Create a controller
+            # and start a thread.
+            ctrl = {
+                "thread": None,
+                "paused": False,
+                "pause_event": threading.Event(),
+                "finished": False,
+                "stop": False,
+                "state": "running",
+                "block": block,
+                "env": env,
+            }
+
+            # controller starts unpaused
+            ctrl["pause_event"].set()
+
+            def _async_worker_with_ctrl():
+                frame = self._new_frame("<async>", env, loc)
+                # register ctrl for this OS thread
+                self._thread_ctrls[threading.get_ident()] = ctrl
+                self.call_stack.append(frame)
+                try:
+                    self._emit_event("async_start", self, frame, env)
+                    try:
+                        self._execute_block(block.statements, env)
+                    except Exception as exc:
+                        try:
+                            self._emit_event("on_error", self, exc)
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        self.call_stack.pop()
+                    except Exception:
+                        pass
+                    try:
+                        self._emit_event("async_end", self, frame, env)
+                    except Exception:
+                        pass
+                    ctrl["finished"] = True
+                    ctrl["state"] = "finished" if not ctrl.get("stop") else "stopped"
+                    # unregister ctrl
+                    try:
+                        tid = threading.get_ident()
+                        if tid in self._thread_ctrls:
+                            del self._thread_ctrls[tid]
+                    except Exception:
+                        pass
+
+            t = threading.Thread(target=_async_worker_with_ctrl, daemon=True, name=f"asm_async_{self.frame_counter}")
+            ctrl["thread"] = t
             t.start()
             return
         raise ASMRuntimeError("Unsupported statement", location=statement.location)
@@ -4869,6 +5151,9 @@ class Interpreter:
                 if builtin.max_args is not None and supplied > builtin.max_args:
                     raise ASMRuntimeError(f"INPUT expects at most {builtin.max_args} arguments", rewrite_rule="INPUT", location=expression.location)
                 result = builtin.impl(self, [], [], env, expression.location)
+                # Start any deferred ASYNC workers now that the builtin had
+                # an opportunity to operate on the returned THR (e.g. PAUSE).
+                self._flush_pending_async_starts()
                 self._emit_event("after_call", self, "INPUT", result, env, expression.location)
                 self._log_step(rule="INPUT", location=expression.location, extra={"args": [], "result": result.value})
                 return result
@@ -4898,6 +5183,64 @@ class Interpreter:
                 },
             )
             return Value(TYPE_FUNC, fn)
+        if expression_type.__name__ == "AsyncExpression":
+            # Evaluate ASYNC as an expression: create a THR controller and return it.
+            block = expression.block  # type: ignore[attr-defined]
+            loc = expression.location
+
+            ctrl = {
+                "thread": None,
+                "paused": False,
+                "pause_event": threading.Event(),
+                "finished": False,
+                "stop": False,
+                "state": "running",
+                "env": env,
+                "block": block,
+            }
+            # controller starts unpaused
+            ctrl["pause_event"].set()
+
+            def _async_worker_expr():
+                frame = self._new_frame("<async>", env, loc)
+                self._thread_ctrls[threading.get_ident()] = ctrl
+                self.call_stack.append(frame)
+                try:
+                    self._emit_event("async_start", self, frame, env)
+                    try:
+                        self._execute_block(block.statements, env)
+                    except Exception as exc:
+                        try:
+                            self._emit_event("on_error", self, exc)
+                        except Exception:
+                            pass
+                finally:
+                    try:
+                        self.call_stack.pop()
+                    except Exception:
+                        pass
+                    try:
+                        tid = threading.get_ident()
+                        if tid in self._thread_ctrls:
+                            del self._thread_ctrls[tid]
+                    except Exception:
+                        pass
+                    try:
+                        self._emit_event("async_end", self, frame, env)
+                    except Exception:
+                        pass
+                    ctrl["finished"] = True
+                    ctrl["state"] = "finished" if not ctrl.get("stop") else "stopped"
+
+            t = threading.Thread(target=_async_worker_expr, daemon=True, name=f"asm_async_{self.frame_counter}")
+            ctrl["thread"] = t
+            # Defer starting the worker thread until the enclosing call
+            # completes. This avoids races where a builtin (e.g. PAUSE)
+            # receives the THR and attempts to pause it only after the
+            # worker has already begun executing.
+            ctrl["start_pending"] = True
+            self._pending_async_starts.append(ctrl)
+            return Value(TYPE_THR, ctrl)
         if expression_type is CallExpression:
             callee_expr = expression.callee
             callee_ident = callee_expr.name if type(callee_expr) is Identifier else None
@@ -4937,6 +5280,7 @@ class Interpreter:
                     if builtin.max_args is not None and supplied > builtin.max_args:
                         raise ASMRuntimeError(f"IMPORT expects at most {builtin.max_args} arguments", rewrite_rule="IMPORT", location=expression.location)
                     result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
+                    self._flush_pending_async_starts()
                 except ASMRuntimeError:
                     self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "status": "error"})
                     raise
@@ -4964,6 +5308,7 @@ class Interpreter:
                     if builtin.max_args is not None and supplied > builtin.max_args:
                         raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
+                    self._flush_pending_async_starts()
                 except ASMRuntimeError:
                     self._log_step(rule=callee_ident, location=expression.location, extra={"args": None, "status": "error"})
                     raise
@@ -5032,6 +5377,7 @@ class Interpreter:
                     if builtin.max_args is not None and supplied > builtin.max_args:
                         raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     result = builtin.impl(self, positional_args, arg_nodes, env, expression.location)
+                    self._flush_pending_async_starts()
                     if pointer_args:
                         self._assign_pointer_target(pointer_args[0], result, location=expression.location, rule=callee_ident)
                 except ASMRuntimeError:
@@ -5232,6 +5578,26 @@ class Interpreter:
                 location=loc,
                 rewrite_rule="EXT",
             )
+
+    def _flush_pending_async_starts(self) -> None:
+        """Start any ASYNC workers that were deferred during expression evaluation.
+
+        The list is cleared after starting so each pending controller is only
+        started once. Exceptions while starting a thread are swallowed to
+        avoid turning benign thread-start failures into interpreter crashes.
+        """
+        if not getattr(self, "_pending_async_starts", None):
+            return
+        pending = self._pending_async_starts
+        self._pending_async_starts = []
+        for ctrl in pending:
+            if not ctrl.get("start_pending"):
+                continue
+            try:
+                ctrl["thread"].start()
+            except Exception:
+                pass
+            ctrl["start_pending"] = False
 
     def _log_step(
         self,
