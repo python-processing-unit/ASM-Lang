@@ -554,6 +554,9 @@ class Builtins:
         self._register_custom("TLEN", 2, 2, self._tlen)
         self._register_custom("FILL", 2, 2, self._fill)
         self._register_custom("TNS", 2, 2, self._tns)
+        self._register_custom("TINT", 1, 1, self._tint)
+        self._register_custom("TFLT", 1, 1, self._tflt)
+        self._register_custom("TSTR", 1, 1, self._tstr)
         self._register_custom("MADD", 2, 2, self._madd)
         self._register_custom("MSUB", 2, 2, self._msub)
         self._register_custom("MMUL", 2, 2, self._mmul)
@@ -565,7 +568,7 @@ class Builtins:
         self._register_custom("TMUL", 2, 2, self._tmul)
         self._register_custom("TDIV", 2, 2, self._tdiv)
         self._register_custom("TPOW", 2, 2, self._tpow)
-        self._register_custom("CONV", 2, 2, self._convolve)
+        self._register_custom("CONV", 2, None, self._convolve)
         self._register_custom("FLIP", 1, 1, self._flip)
         self._register_custom("TFLIP", 2, 2, self._tflip)
         self._register_custom("SCAT", 3, 3, self._scatter)
@@ -989,8 +992,42 @@ class Builtins:
         if not values:
             raise ASMRuntimeError("MAX requires at least one argument", rewrite_rule="MAX")
         first_type = values[0].type
+        # Allow MAX over tensors: flatten all tensor arguments and compute
+        # the maximum element. All elements must have the same (scalar)
+        # type. Tensor-of-tensors or mixed element types are rejected.
         if first_type == TYPE_TNS:
-            raise ASMRuntimeError("MAX cannot operate on tensors", rewrite_rule="MAX", location=location)
+            # Ensure all args are tensors
+            if any(v.type != TYPE_TNS for v in values):
+                raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
+            # Gather all elements from all tensors (flatten)
+            elems: List[Value] = []
+            for v in values:
+                tensor = self._expect_tns(v, "MAX", location)
+                # tensor.data is a numpy array of Value objects
+                for el in tensor.data.ravel():
+                    # Dereference any pointer values inside the tensor
+                    elems.append(self._deref_pointer(el, rule="MAX", location=location))
+            if not elems:
+                raise ASMRuntimeError("MAX requires tensors with at least one element", rewrite_rule="MAX", location=location)
+            # All elements must share the same type
+            elem_type = elems[0].type
+            # Elements must be scalar values; tensors-as-elements are forbidden
+            if elem_type == TYPE_TNS or any(e.type == TYPE_TNS for e in elems):
+                raise ASMRuntimeError("MAX tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MAX", location=location)
+            if any(e.type != elem_type for e in elems):
+                raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
+            if elem_type == TYPE_INT:
+                ints = [self._expect_int(e, "MAX", location) for e in elems]
+                return Value(TYPE_INT, max(ints))
+            if elem_type == TYPE_FLT:
+                flts = [self._expect_flt(e, "MAX", location) for e in elems]
+                return Value(TYPE_FLT, float(max(flts)))
+            if elem_type == TYPE_STR:
+                strs = [self._expect_str(e, "MAX", location) for e in elems]
+                longest = max(strs, key=len)
+                return Value(TYPE_STR, longest)
+            raise ASMRuntimeError("MAX cannot operate on tensors of this element type", rewrite_rule="MAX", location=location)
+
         if any(v.type != first_type for v in values):
             raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
         if first_type == TYPE_INT:
@@ -1007,8 +1044,39 @@ class Builtins:
         if not values:
             raise ASMRuntimeError("MIN requires at least one argument", rewrite_rule="MIN")
         first_type = values[0].type
+        # Allow MIN over tensors: flatten all tensor arguments and compute
+        # the minimum element. All elements must have the same (scalar)
+        # type. Tensor-of-tensors or mixed element types are rejected.
         if first_type == TYPE_TNS:
-            raise ASMRuntimeError("MIN cannot operate on tensors", rewrite_rule="MIN", location=location)
+            # Ensure all args are tensors
+            if any(v.type != TYPE_TNS for v in values):
+                raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
+            # Gather all elements from all tensors (flatten)
+            elems: List[Value] = []
+            for v in values:
+                tensor = self._expect_tns(v, "MIN", location)
+                for el in tensor.data.ravel():
+                    elems.append(self._deref_pointer(el, rule="MIN", location=location))
+            if not elems:
+                raise ASMRuntimeError("MIN requires tensors with at least one element", rewrite_rule="MIN", location=location)
+            # Elements must be scalar values; tensors-as-elements are forbidden
+            elem_type = elems[0].type
+            if elem_type == TYPE_TNS or any(e.type == TYPE_TNS for e in elems):
+                raise ASMRuntimeError("MIN tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MIN", location=location)
+            if any(e.type != elem_type for e in elems):
+                raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
+            if elem_type == TYPE_INT:
+                ints = [self._expect_int(e, "MIN", location) for e in elems]
+                return Value(TYPE_INT, min(ints))
+            if elem_type == TYPE_FLT:
+                flts = [self._expect_flt(e, "MIN", location) for e in elems]
+                return Value(TYPE_FLT, float(min(flts)))
+            if elem_type == TYPE_STR:
+                strs = [self._expect_str(e, "MIN", location) for e in elems]
+                shortest = min(strs, key=len)
+                return Value(TYPE_STR, shortest)
+            raise ASMRuntimeError("MIN cannot operate on tensors of this element type", rewrite_rule="MIN", location=location)
+
         if any(v.type != first_type for v in values):
             raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
         if first_type == TYPE_INT:
@@ -3003,6 +3071,87 @@ class Builtins:
         new_data = flipped.ravel().copy()
         return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=new_data))
 
+    def _tint(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        """TINT(TNS: obj):TNS
+        Convert each element of `obj` to INT using `INT` conversion rules.
+        Raises a runtime error if any element cannot be converted.
+        """
+        tensor = self._expect_tns(args[0], "TINT", location)
+        flat = tensor.data.ravel()
+        n = flat.size
+        if n == 0:
+            return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=np.array([], dtype=object)))
+        out = np.empty(n, dtype=object)
+        for i in range(n):
+            entry = flat[i]
+            try:
+                converted = self._int_op(None, [entry], [], None, location)
+            except ASMRuntimeError as e:
+                raise ASMRuntimeError(f"TINT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TINT")
+            out[i] = converted
+        return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
+
+    def _tflt(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        """TFLT(TNS: obj):TNS
+        Convert each element of `obj` to FLT using `FLT` conversion rules.
+        Raises a runtime error if any element cannot be converted.
+        """
+        tensor = self._expect_tns(args[0], "TFLT", location)
+        flat = tensor.data.ravel()
+        n = flat.size
+        if n == 0:
+            return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=np.array([], dtype=object)))
+        out = np.empty(n, dtype=object)
+        for i in range(n):
+            entry = flat[i]
+            try:
+                converted = self._flt_op(None, [entry], [], None, location)
+            except ASMRuntimeError as e:
+                raise ASMRuntimeError(f"TFLT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TFLT")
+            out[i] = converted
+        return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
+
+    def _tstr(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        """TSTR(TNS: obj):TNS
+        Convert each element of `obj` to STR using `STR` conversion rules.
+        Raises a runtime error if any element cannot be converted.
+        """
+        tensor = self._expect_tns(args[0], "TSTR", location)
+        flat = tensor.data.ravel()
+        n = flat.size
+        if n == 0:
+            return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=np.array([], dtype=object)))
+        out = np.empty(n, dtype=object)
+        for i in range(n):
+            entry = flat[i]
+            try:
+                converted = self._str_op(None, [entry], [], None, location)
+            except ASMRuntimeError as e:
+                raise ASMRuntimeError(f"TSTR: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TSTR")
+            out[i] = converted
+        return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
+
     def _scatter(
         self,
         interpreter: "Interpreter",
@@ -3113,26 +3262,152 @@ class Builtins:
         self,
         interpreter: "Interpreter",
         args: List[Value],
-        __: List[Expression],
+        arg_nodes: List[Expression],
         ___: Environment,
         location: SourceLocation,
     ) -> Value:
-        """CONV(TNS: x, TNS: kernel):TNS
+        """CONV(TNS: x, TNS: kernel, ...kwargs):TNS
 
-        N-dimensional discrete convolution with clamped (replicate) boundary.
-
-        - `x` and `kernel` must have the same rank.
-        - Each `kernel` dimension length must be odd (so it has a well-defined center).
-        - Tensor elements must be uniformly INT or uniformly FLT within each tensor.
-        - If both tensors are INT -> output elements are INT.
-          Otherwise output elements are FLT (INT/FLT mixing is allowed and produces FLT).
-
-        The output shape equals the input `x` shape.
+        Extended CONV: preserves original N-D convolution semantics when called
+        as CONV(x, kernel). Additionally, when called with keyword args
+        matching the 2D helper (`stride_w`, `stride_h`, `pad_w`, `pad_h`,
+        `bias`) and when the input is a 3-D WHC tensor and the kernel is a
+        4-D tensor `[kw,kh,in_c,out_c]`, perform a multi-output 2D
+        convolution with optional stride/padding/bias similar to lib/cnn.asmln
+        `CONV2D`.
         """
 
         x = self._expect_tns(args[0], "CONV", location)
         kernel = self._expect_tns(args[1], "CONV", location)
 
+        # Parse optional keyword arguments supplied as named call arguments.
+        stride_w = 1
+        stride_h = 1
+        pad_w = 0
+        pad_h = 0
+        bias_val: Optional[Value] = None
+
+        for idx, node in enumerate(arg_nodes):
+            # Only consider named arguments beyond the first two positional args.
+            if idx < 2:
+                continue
+            name = None
+            if isinstance(node, CallArgument):
+                name = node.name
+            # If name present, map it to the provided value.
+            if name is not None:
+                val = args[idx]
+                if name == "stride_w":
+                    stride_w = self._expect_int(val, "CONV", location)
+                elif name == "stride_h":
+                    stride_h = self._expect_int(val, "CONV", location)
+                elif name == "pad_w":
+                    pad_w = self._expect_int(val, "CONV", location)
+                elif name == "pad_h":
+                    pad_h = self._expect_int(val, "CONV", location)
+                elif name == "bias":
+                    bias_val = val
+                else:
+                    raise ASMRuntimeError(f"CONV: unknown keyword argument '{name}'", location=location, rewrite_rule="CONV")
+
+        # If caller provided CONV2D-style kwargs and this looks like a WHC
+        # input with a 4-D kernel [kw,kh,in_c,out_c], call the multi-output
+        # 2-D convolution path (stride/pad/bias supported). Otherwise fall
+        # back to the original N-D behavior.
+        if len(x.shape) == 3 and len(kernel.shape) == 4:
+            in_w, in_h, in_c = x.shape
+            kw, kh, k_in_c, out_c = kernel.shape
+            if k_in_c != in_c:
+                raise ASMRuntimeError("CONV kernel input channels do not match input tensor channels", location=location, rewrite_rule="CONV")
+
+            # Determine numeric output type
+            def _uniform_numeric_type(t: Tensor, which: str) -> str:
+                if t.data.size == 0:
+                    raise ASMRuntimeError(f"CONV does not support empty {which} tensors", location=location, rewrite_rule="CONV")
+                first = next(iter(t.data.flat)).type
+                if first not in (TYPE_INT, TYPE_FLT):
+                    raise ASMRuntimeError("CONV expects INT or FLT tensor elements", location=location, rewrite_rule="CONV")
+                if any(v.type != first for v in t.data.flat):
+                    raise ASMRuntimeError("CONV does not allow mixed element types within a tensor", location=location, rewrite_rule="CONV")
+                return first
+
+            x_type = _uniform_numeric_type(x, "input")
+            k_type = _uniform_numeric_type(kernel, "kernel")
+            out_type = TYPE_INT if (x_type == TYPE_INT and k_type == TYPE_INT) else TYPE_FLT
+
+            # Zero-padding to match CONV2D helper behavior.
+            p_w = in_w + (pad_w * 2)
+            p_h = in_h + (pad_h * 2)
+
+            out_w = ( (p_w - kw) // stride_w ) + 1
+            out_h = ( (p_h - kh) // stride_h ) + 1
+            if out_w < 1 or out_h < 1:
+                raise ASMRuntimeError("CONV produced non-positive output dimensions", location=location, rewrite_rule="CONV")
+
+            # Prepare padded input array (object dtype of Values)
+            x_arr = x.data.reshape(tuple(x.shape))
+            padded = np.empty((p_w, p_h, in_c), dtype=object)
+            # Fill with zero pad (match lib/cnn.asmln PAD2D behavior used there)
+            pad_zero = Value(TYPE_INT, 0) if out_type == TYPE_INT else Value(TYPE_FLT, 0.0)
+            for px in range(p_w):
+                for py in range(p_h):
+                    for pc in range(in_c):
+                        # Map back to original coordinates
+                        ox = px - pad_w
+                        oy = py - pad_h
+                        if 0 <= ox < in_w and 0 <= oy < in_h:
+                            padded[px, py, pc] = x_arr[ox, oy, pc]
+                        else:
+                            padded[px, py, pc] = pad_zero
+
+            # Prepare kernel and bias arrays
+            k_arr = kernel.data.reshape(tuple(kernel.shape))
+            bias_tns: Optional[Tensor] = None
+            use_bias = False
+            if bias_val is not None:
+                bias_tns = self._expect_tns(bias_val, "CONV", location)
+                if bias_tns.data.size == out_c:
+                    use_bias = True
+
+            out_buf = np.empty(out_w * out_h * out_c, dtype=object)
+            idx_out = 0
+            for oc in range(out_c):
+                b = 0
+                if use_bias:
+                    bv = bias_tns.data.flat[oc]
+                    b = int(bv.value) if out_type == TYPE_INT else float(bv.value)
+                for oy in range(out_h):
+                    for ox in range(out_w):
+                        acc_int = 0
+                        acc_flt = 0.0
+                        base_x = ox * stride_w
+                        base_y = oy * stride_h
+                        for ic in range(in_c):
+                            for ky in range(kh):
+                                for kx in range(kw):
+                                    px = base_x + kx
+                                    py = base_y + ky
+                                    xv: Value = padded[px, py, ic]
+                                    kv: Value = k_arr[kx, ky, ic, oc]
+                                    if out_type == TYPE_INT:
+                                        acc_int += int(xv.value) * int(kv.value)
+                                    else:
+                                        ax = float(xv.value) if xv.type == TYPE_FLT else float(int(xv.value))
+                                        ak = float(kv.value) if kv.type == TYPE_FLT else float(int(kv.value))
+                                        acc_flt += ax * ak
+                        if out_type == TYPE_INT:
+                            val = acc_int + (int(b) if use_bias else 0)
+                            out_buf[idx_out] = Value(TYPE_INT, val)
+                        else:
+                            val = acc_flt + (float(b) if use_bias else 0.0)
+                            out_buf[idx_out] = Value(TYPE_FLT, float(val))
+                        idx_out += 1
+
+            return Value(TYPE_TNS, Tensor(shape=[out_w, out_h, out_c], data=out_buf))
+
+        # Fallback: preserve original N-D behavior (replicate boundaries,
+        # odd kernel dims, same-shape output). This is the original path
+        # (unchanged).
         if len(x.shape) != len(kernel.shape):
             raise ASMRuntimeError(
                 "CONV requires input and kernel tensors with the same rank",
@@ -3175,8 +3450,6 @@ class Builtins:
         rank = len(x.shape)
         centers = [d // 2 for d in kernel.shape]  # 0-based
 
-        # Fast path: use NumPy padding + sliding windows + vectorized multiply/sum.
-        # This keeps exact boundary semantics (replicate) and true convolution (kernel flipped).
         try:
             sliding_window_view = np.lib.stride_tricks.sliding_window_view  # type: ignore[attr-defined]
 
@@ -3195,7 +3468,6 @@ class Builtins:
                     i += 1
                 return Value(TYPE_TNS, Tensor(shape=list(x.shape), data=out))
 
-            # FLT output: allow INT/FLT mixing by converting to float.
             def _as_float(v: Value) -> float:
                 return float(v.value) if v.type == TYPE_FLT else float(int(v.value))
 
@@ -3214,8 +3486,6 @@ class Builtins:
             return Value(TYPE_TNS, Tensor(shape=list(x.shape), data=out))
 
         except Exception:
-            # Fallback to the reference implementation if sliding window view
-            # isn't available or if NumPy raises in an edge case.
             x_arr = x.data.reshape(tuple(x.shape))
             k_arr = kernel.data.reshape(tuple(kernel.shape))
             out = np.empty(x.data.size, dtype=object)
@@ -3224,7 +3494,6 @@ class Builtins:
                 acc_int = 0
                 acc_flt = 0.0
                 for k_pos in np.ndindex(*kernel.shape):
-                    # Map kernel position to input position centered at out_pos.
                     in_pos: List[int] = []
                     for axis in range(rank):
                         offset = k_pos[axis] - centers[axis]
@@ -3235,7 +3504,6 @@ class Builtins:
                             coord = x.shape[axis] - 1
                         in_pos.append(coord)
 
-                    # True convolution flips the kernel along every axis.
                     k_flip = tuple(kernel.shape[axis] - 1 - k_pos[axis] for axis in range(rank))
                     xv: Value = x_arr[tuple(in_pos)]
                     kv: Value = k_arr[k_flip]

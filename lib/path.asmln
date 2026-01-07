@@ -80,8 +80,12 @@ FUNC DELEXT(STR: path):STR{ # returns path without extension
 FUNC TEMPFILE(STR: local_path):STR{
     IF(EQ(OS(),"win")){
         STR: temp = "C:/Windows/Temp/"
+    } ELSEIF(EQ(OS(),"mac")){
+        THROW("TEMPFILE not implemented for macOS yet")
+        # per-user temp dirs on macOS are more complex
+        # add later
     } ELSE {
-        ASSERT("TEMPFILE not implemented for ", OS())
+        STR: temp = "/tmp/"
     }
     STR: final_path = JOIN(temp, local_path)
     DEL(temp)

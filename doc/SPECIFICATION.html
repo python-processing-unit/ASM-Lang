@@ -459,7 +459,9 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
 ### 12.5 Aggregates / Utilities
 - `MAX(INT|FLT|STR: a1, ..., INT|FLT|STR: aN):INT|FLT|STR` ; numeric max for `INT`/`FLT`, longest for `STR`; supplying tensors or mixing types is an error
+- `MAX(TNS: t1, ..., TNS: tN):INT|FLT|STR` ; flatten the provided tensors and return the largest scalar element according to the normal rules (numeric max for `INT`/`FLT`, longest for `STR`). All tensor elements must be scalar (`INT`, `FLT`, or `STR`) and share the same type. Mixing element types or including `TNS` elements (tensor-of-tensors) is an error.
 - `MIN(INT|FLT|STR: a1, ..., INT|FLT|STR: aN):INT|FLT|STR` ; numeric min for `INT`/`FLT`, shortest for `STR`; supplying tensors or mixing types is an error
+- `MIN(TNS: t1, ..., TNS: tN):INT|FLT|STR` ; flatten the provided tensors and return the smallest scalar element according to the normal rules (numeric min for `INT`/`FLT`, shortest for `STR`). All tensor elements must be scalar (`INT`, `FLT`, or `STR`) and share the same type. Mixing element types or including `TNS` elements (tensor-of-tensors) is an error.
 - `SUM(INT|FLT: a1, ..., INT|FLT: aN):INT|FLT` ; sum of the arguments (no mixing INT/FLT)
 - `LEN(INT|STR: a1, ..., INT|STR: aN):INT` ; number of arguments (N), rejects tensors
 - `ALL(ANY: a1, ..., ANY: aN):INT` ; Boolean AND (empty string -> false, non-empty -> true)
@@ -475,7 +477,19 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `SCAT(TNS: src, TNS: dst, TNS: ind):TNS` — Returns a copy of `dst` with a rectangular slice replaced by `src`. `ind` must be a 2D tensor of `INT` pairs with shape `[TLEN(dst, 1), 10]` (binary `10` = decimal 2), i.e., one `[lo, hi]` row per destination dimension (rank; for example `rank = TLEN(SHAPE(dst), 1)`). Indices are 1-based; negatives follow the tensor indexing rules (for example, `-1` is the last element) and `0` is invalid. For each dimension, the inclusive span `hi - lo + 1` must equal the corresponding `src` dimension length, and all bounds must fall within `dst`. Elements outside the slice are copied from `dst` unchanged.
 - `FILL(TNS: tensor, ANY: value):TNS` — Returns a new tensor with the same shape as `tensor`, filled with `value`. The supplied value`s type must match the existing element type at every position.
 - `TNS(TNS: shape, ANY: value):TNS` — Creates a new `TNS` with the shape described by a 1D `TNS` of positive `INT` lengths, filled with `value`.
-- `CONV(TNS: x, TNS: kernel):TNS` — N-dimensional discrete convolution producing an output tensor with the same shape as `x`. The `kernel` must have the same rank as `x` and each kernel dimension length must be odd (so the kernel has a well-defined center). At the boundaries, out-of-range sample coordinates are clamped to the nearest valid index (replicate padding). Both tensors must contain only `INT` or only `FLT` elements (no mixed element types within a tensor). If both tensors are `INT`-valued, the output is an `INT` tensor; otherwise the output is a `FLT` tensor.
+- `CONV(TNS: x, TNS: kernel, INT: stride_w = 1, INT: stride_h = 1, INT: pad_w = 0, INT: pad_h = 0, TNS: bias = []):TNS` — Extended convolution operator.
+
+  - Backward-compatible two-argument form: when called as `CONV(x, kernel)` the operator performs the original N-dimensional discrete convolution and returns a tensor with the same shape as `x`. Requirements and semantics from the original behavior remain unchanged: `kernel` must have the same rank as `x`, every kernel dimension length must be odd (so the kernel has a well-defined center), boundary sampling is clamped to the nearest valid index (replicate padding), and tensor element types must be uniformly `INT` or uniformly `FLT` within each tensor. If both tensors are `INT` the output is `INT`, otherwise the output is `FLT`.
+
+  - 2-D multi-output extension (keyword form): when called with any of the keywords `stride_w`, `stride_h`, `pad_w`, `pad_h`, or `bias`, and when the input `x` is a 3-D WHC tensor (width, height, channels) and `kernel` is a 4-D tensor of shape `[kw, kh, in_c, out_c]`, `CONV` performs a multi-output 2-D convolution equivalent to the `CONV2D` helper in the standard library. In this mode:
+    - `pad_w` / `pad_h` specify zero-padding added to both sides of the width/height dimensions (padding value = 0). The padded input size is `in_w + 2*pad_w` by `in_h + 2*pad_h`.
+    - `stride_w` / `stride_h` specify the horizontal and vertical strides (default `1`).
+    - Output spatial dimensions are computed as `out_w = floor((p_w - kw) / stride_w) + 1` and `out_h = floor((p_h - kh) / stride_h) + 1` where `p_w = in_w + 2*pad_w`, `p_h = in_h + 2*pad_h`.
+    - If `bias` is supplied and is a 1-D `TNS` of length `out_c`, per-output-channel bias is added to each output channel; otherwise no bias is applied.
+    - The resulting tensor shape is `[out_w, out_h, out_c]` and numeric typing follows the usual rule: if both input and kernel are `INT` the output is `INT`, otherwise `FLT` (INT/FLT mixing is allowed and yields `FLT`).
+    - Unknown keyword names result in a runtime error; keywords are optional and supplying only `x` and `kernel` preserves original N-D semantics.
+
+  - Note: the two-argument N-D form remains available and unchanged. The keyword extension provides a convenient, backward-compatible way to express common 2-D CNN patterns (stride, explicit zero-padding, and optional bias) without requiring users to compose lower-level primitives manually.
 - `MADD/MSUB/MMUL/MDIV(TNS: x, TNS: y):TNS` — Elementwise addition, subtraction, multiplication, and division. Shapes must match; all elements must be `INT` or all `FLT` (no mixing). Division by zero is an error.
 - `MSUM(TNS: t1, ..., TNS: tN):TNS` — Elementwise sum across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
 - `MPROD(TNS: t1, ..., TNS: tN):TNS` — Elementwise product across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
@@ -501,6 +515,9 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 ### 12.10 Numeric conversions / predicates
 - `INT(ANY: a):INT` — Explicit conversion to integer. If `a` is `FLT`, conversion truncates toward zero.
 - `FLT(ANY: a):FLT` — Explicit conversion to float.
+- `TINT(TNS: obj):TNS` — Convert each scalar element of `obj` to `INT` using the `INT` conversion rules; raises a runtime error if any element cannot be converted.
+- `TFLT(TNS: obj):TNS` — Convert each scalar element of `obj` to `FLT` using the `FLT` conversion rules; raises a runtime error if any element cannot be converted.
+- `TSTR(TNS: obj):TNS` — Convert each scalar element of `obj` to `STR` using the `STR` conversion rules; raises a runtime error if any element cannot be converted.
 - `ISFLT(SYMBOL: name):INT` — 1 if `name` is bound and has type `FLT`, otherwise 0.
 
 ### 12.11 Rounding
@@ -567,8 +584,8 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `POP(SYMBOL: x)` — Convenience statement combining `RETURN` and `DEL`: when executed inside a function body it retrieves the current value of the identifier `x`, deletes the binding `x` from the environment (so subsequent references are an error), and returns the retrieved value to the caller. Using `POP` outside of a function is a runtime error.
 - `BREAK(INT: n)` ; break out of the innermost `n` enclosing loops; raises a runtime error if `n` ≤ 0 or if `n` is greater than the current loop nesting depth
 - `CONTINUE()` ; skip remaining statements in the innermost loop iteration and proceed to the next iteration; if used in the last iteration it acts like `BREAK(1)`. Using `CONTINUE()` outside of a loop is a runtime error.
-- `GOTOPOINT(n)` ; register a gotopoint with identifier `n` at this statement's location (identifier may be `INT` or `STR`) (n evaluated at runtime). Gotopoints are visible across the containing function or top-level scope rather than being restricted to a single lexical block.
-- `GOTO(n)` ; jump to a previously-registered gotopoint with identifier `n` (`INT` or `STR`) within the same function or top-level scope; runtime error if not registered in that scope
+- `GOTOPOINT(INT|STR: n)` ; register a gotopoint with identifier `n` at this statement's location (identifier may be `INT` or `STR`) (n evaluated at runtime). Gotopoints are visible across the containing function or top-level scope rather than being restricted to a single lexical block.
+- `GOTO(INT|STR: n)` ; jump to a previously-registered gotopoint with identifier `n` (`INT` or `STR`) within the same function or top-level scope; runtime error if not registered in that scope
 - `ASYNC{ block }` ; execute `block` asynchronously in a separate thread (while sharing the same namespace); the caller continues executing immediately without waiting for the async block to complete. Any uncaught errors in the async block are logged to the interpreter's error log but do not affect the caller.
 - `TRY{ block }CATCH{ block }` ; execute `block` in the `TRY` and, if an interpreter-level runtime error occurs during the `TRY` block, stop the `TRY` and execute the directly-following `CATCH` block. If no error occurs, the `CATCH` block is skipped.
 - `TRY{ block }CATCH(SYMBOL: name){ block }` ; like the previous form but bind a temporary `STR` symbol `name` visible inside the `CATCH` block containing the error message. The temporary symbol shadows any existing binding for `name` and is restored or removed after the `CATCH` block completes.
