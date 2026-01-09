@@ -4395,8 +4395,23 @@ class Interpreter:
 
     def _execute_statement(self, statement: Statement, env: Environment) -> None:
         self._log_step(rule=statement.__class__.__name__, location=statement.location)
+
+        def _name_exists_or_declared(name: str) -> bool:
+            cur: Optional[Environment] = env
+            while cur is not None:
+                if name in cur.values or name in cur.declared:
+                    return True
+                cur = cur.parent
+            return False
+
         statement_type = type(statement)
         if statement_type is Declaration:
+            if "." in statement.name and not _name_exists_or_declared(statement.name):
+                raise ASMRuntimeError(
+                    f"Cannot create module-qualified name '{statement.name}'",
+                    location=statement.location,
+                    rewrite_rule="ASSIGN",
+                )
             # Record a type declaration without creating a value. Do not
             # introduce a binding; reads will still raise until the name is
             # assigned. If a value already exists in the same environment,
@@ -4419,6 +4434,16 @@ class Interpreter:
             env.declared[statement.name] = statement.declared_type
             return
         if statement_type is Assignment:
+            if (
+                statement.declared_type is not None
+                and "." in statement.target
+                and not _name_exists_or_declared(statement.target)
+            ):
+                raise ASMRuntimeError(
+                    f"Cannot create module-qualified name '{statement.target}'",
+                    location=statement.location,
+                    rewrite_rule="ASSIGN",
+                )
             if statement.target in self.functions:
                 raise ASMRuntimeError(
                     f"Identifier '{statement.target}' already bound as function", location=statement.location, rewrite_rule="ASSIGN"
