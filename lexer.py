@@ -182,17 +182,127 @@ class Lexer:
         chars: List[str] = []
         _peek = self._peek
         _advance = self._advance
+        text = self.text
+        n = self._n
+
+        def _is_hex_digit(ch: str) -> bool:
+            return ("0" <= ch <= "9") or ("a" <= ch <= "f") or ("A" <= ch <= "F")
+
+        def _escape_error(msg: str, esc_line: int, esc_col: int) -> ASMParseError:
+            return ASMParseError(f"{msg} at {self.filename}:{esc_line}:{esc_col}")
+
+        def _consume_exact_hex(count: int, *, esc_line: int, esc_col: int, kind: str) -> str:
+            digits: List[str] = []
+            for _ in range(count):
+                if self._eof:
+                    raise _escape_error(f"Invalid \\{kind} escape (expected {count} hex digits)", esc_line, esc_col)
+                chh = _peek()
+                if not _is_hex_digit(chh):
+                    raise _escape_error(f"Invalid \\{kind} escape (expected hex digit, got '{chh}')", esc_line, esc_col)
+                digits.append(chh)
+                _advance()
+            return "".join(digits)
+
+        raw_mode = False
         while not self._eof:
             ch = _peek()
             if ch == opening:
                 _advance()
                 return Token("STRING", "".join(chars), line, col)
-            if ch == "\n":
+            # Newlines are not permitted in string literals.
+            if ch == "\n" or ch == "\r":
                 raise ASMParseError(
                     f"Unterminated string literal at {self.filename}:{line}:{col}"
                 )
+
+            if ch == "\\":
+                esc_line, esc_col = self.line, self.column
+                if self.index + 1 >= n:
+                    raise ASMParseError(
+                        f"Unterminated string literal at {self.filename}:{line}:{col}"
+                    )
+                nxt = text[self.index + 1]
+
+                # Raw mode: only \R has meaning; everything else is literal.
+                if raw_mode:
+                    if nxt == "R":
+                        _advance()  # consume '\\'
+                        _advance()  # consume 'R'
+                        raw_mode = not raw_mode
+                        continue
+                    # Treat '\\X' as two literal characters.
+                    _advance()  # consume '\\'
+                    chars.append("\\")
+                    if self._eof:
+                        raise ASMParseError(
+                            f"Unterminated string literal at {self.filename}:{line}:{col}"
+                        )
+                    if _peek() == "\n" or _peek() == "\r":
+                        raise ASMParseError(
+                            f"Unterminated string literal at {self.filename}:{line}:{col}"
+                        )
+                    chars.append(_peek())
+                    _advance()
+                    continue
+
+                # Non-raw mode: interpret escape sequences.
+                _advance()  # consume '\\'
+                if self._eof:
+                    raise ASMParseError(
+                        f"Unterminated string literal at {self.filename}:{line}:{col}"
+                    )
+                code = _peek()
+
+                if code == "R":
+                    _advance()
+                    raw_mode = not raw_mode
+                    continue
+
+                simple = {
+                    "\\": "\\",
+                    '"': '"',
+                    "'": "'",
+                    "a": "\a",
+                    "b": "\b",
+                    "f": "\f",
+                    "n": "\n",
+                    "r": "\r",
+                    "t": "\t",
+                    "v": "\v",
+                    "e": "\x1b",
+                }
+                if code in simple:
+                    chars.append(simple[code])
+                    _advance()
+                    continue
+
+                if code == "x":
+                    _advance()
+                    digits = _consume_exact_hex(2, esc_line=esc_line, esc_col=esc_col, kind="x")
+                    chars.append(chr(int(digits, 16)))
+                    continue
+                if code == "u":
+                    _advance()
+                    digits = _consume_exact_hex(4, esc_line=esc_line, esc_col=esc_col, kind="u")
+                    cp = int(digits, 16)
+                    if cp > 0x10FFFF:
+                        raise _escape_error("Invalid \\u escape (code point out of range)", esc_line, esc_col)
+                    chars.append(chr(cp))
+                    continue
+                if code == "U":
+                    _advance()
+                    digits = _consume_exact_hex(8, esc_line=esc_line, esc_col=esc_col, kind="U")
+                    cp = int(digits, 16)
+                    if cp > 0x10FFFF:
+                        raise _escape_error("Invalid \\U escape (code point out of range)", esc_line, esc_col)
+                    chars.append(chr(cp))
+                    continue
+
+                raise _escape_error(f"Unknown escape sequence \\{code}", esc_line, esc_col)
+
             chars.append(ch)
             _advance()
+
         raise ASMParseError(
             f"Unterminated string literal at {self.filename}:{line}:{col}"
         )

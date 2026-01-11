@@ -111,7 +111,28 @@ Binary floating-point literal: an IEEE754 floating-point value written in binary
 
 FLT literals MUST NOT begin with the radix point (so `.1` is invalid). A leading `-` may prefix a FLT literal using the same rules as for integers (the dash is part of the literal and is not an operator).
 
-String literal: a sequence of ASCII characters enclosed in either double quotation marks (`"`) or single quotation marks (`'`) with no escape processing. A string opened with one delimiter must be closed with the same delimiter; other quotation characters appearing inside the string are treated as ordinary characters. Newlines are not permitted inside string literals. The literal's value is the contained character sequence.
+String literal: a sequence of characters enclosed in either double quotation marks (`"`) or single quotation marks (`'`). A string opened with one delimiter must be closed with the same delimiter. Newlines are not permitted inside string literals.
+
+String literals support backslash escape codes. Unknown escape codes (or invalid hexadecimal literals in `\x`/`\u`/`\U`) raise syntax errors at parse time.
+
+Supported escape codes:
+
+- `\\` = U+005C
+- `\"` = U+0022
+- `\'` = U+0027
+- `\a` = U+0007
+- `\b` = U+0008
+- `\f` = U+000C
+- `\n` = U+000A
+- `\r` = U+000D
+- `\t` = U+0009
+- `\v` = U+000B
+- `\e` = U+001B
+- `\xHH` = exactly two hex digits (0-9A-Fa-f). Produces code point U+00..U+FF specified by 0xHH.
+- `\uHHHH` = exactly four hex digits. Produces code point U+HHHH.
+- `\UHHHHHHHH` = exactly eight hex digits. Produces code point U+HHHHHHHH.
+
+Raw-mode escape: `\R` toggles raw-mode for the string (until the next `\R` or the end of the string). While raw mode is on, all escape codes (except `\R`) are treated as plaintext (so `\n` contributes the two characters `\` and `n`, and `\"` contributes the two characters `\` and `"`).
 
 Tensor literal: a non-empty bracketed collection of expressions. Each pair of matching brackets introduces a dimension; nested brackets must form a rectangular shape (all sublists at a given depth have the same length) or a syntax error is raised. The outermost bracket corresponds to dimension 1. Examples (lengths shown in binary):
 
@@ -147,7 +168,7 @@ Additionally, the symbol `*` may be used in an index position to denote a full-d
 
 All other tensor operations are non-mutating: tensor literals and tensor-valued built-ins produce new tensor values rather than mutating existing ones. Because indexed assignment mutates a tensor object, if the same tensor value is aliased (bound to multiple identifiers, passed as an argument, or stored inside another tensor), all aliases observe the mutation.
 
-Every runtime value has a static type: `INT`, `FLT`, `STR`, `TNS`, or `FUNC`. Integers are conceptually unbounded mathematical integers. Floats are IEEE754 binary floating-point numbers. Strings are byte strings of ASCII characters. Tensors are non-scalar aggregates whose elements may be `INT`, `FLT`, `STR`, `FUNC`, or `TNS`.
+Every runtime value has a static type: `INT`, `FLT`, `STR`, `TNS`, or `FUNC`. Integers are conceptually unbounded mathematical integers. Floats are IEEE754 binary floating-point numbers. Strings are sequences of characters (source text is ASCII, but escape codes may denote non-ASCII code points). Tensors are non-scalar aggregates whose elements may be `INT`, `FLT`, `STR`, `FUNC`, or `TNS`.
 
 Function value (`FUNC`): a reference to a user-defined function body (including its lexical closure). A `FUNC` value can be stored in variables or tensors, passed as an argument, or returned from a function. The call syntax applies to any expression that evaluates to `FUNC`; for example, `alias()` calls the function bound to `alias`, and `tns[1]()` calls the function stored in that tensor element. `FUNC` values are always truthy; equality compares object identity (two references are equal only if they refer to the same function definition). String rendering produces an implementation-defined placeholder such as `<func name>`.
 
@@ -397,152 +418,267 @@ All operators and functions, both built-in and user-defined, share a uniform fun
 Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number of indices must equal the tensor's dimension count. Indices are one-based; 0 is invalid. Negative indices address from the end of the dimension (for example, -1 is the last element). Attempting to index with an out-of-range position raises a runtime error.
 
 ### 12.1 Function / Operator Signatures (expression position)
+
 - `INPUT():STR` or `INPUT(STR: s):STR` ; returns a `STR` from the input stream; use `INT` to coerce to an integer when needed. The interpreter prints the prompt inline (so a REPL or other output sink can display it) before reading a line of input. The I/O event is recorded for replay and, when a prompt was supplied, the recorded event includes the prompt text.
+
 - `PRINT(INT|STR: a1, INT|STR: a2, ..., INT|STR: aN):INT` ; prints `INT`/`STR` arguments (side-effect), tensors are rejected; returns `INT` 0
+
 - `RUN(STR: s)` ; Run a string as an ASM-Lang program within the current environment;
+
 - `UPPER(STR: s):STR` ; `STR` -> uppercase `STR`; error if `s` is `INT`
+
 - `LOWER(STR: s):STR` ; `STR` -> lowercase `STR`; error if `s` is `INT`
+
 - `SPLIT(STR: string, STR: delimiter = " "):TNS` — Splits `string` on the exact substring `delimiter` and returns the parts as a one-dimensional `TNS` of `STR`. The delimiter defaults to a single space. The delimiter must be non-empty; otherwise a runtime error is raised. Consecutive delimiters and trailing delimiters are preserved, so empty-string elements may appear in the result.
+
 - `STRIP(STR: string, STR: remove):STR` — Returns a `STR` formed by removing every occurrence of the substring `remove` from `string`. The `remove` argument must be a non-empty string; supplying an empty `remove` raises a runtime error.
+
 - `REPLACE(STR: string, STR: a, STR: b):STR` — Returns a `STR` formed by replacing every occurrence of the substring `a` in `string` with `b`. The `a` argument must be a non-empty string; supplying an empty `a` raises a runtime error.
+
 - `ASSERT(ANY: a)` ; crashes if `INT`-style` truthiness of `a` is 0
+
 - `THROW(INT|STR: a1, INT|STR: a2, ...):STR` ; concatenates its arguments using the same rendering rules as `PRINT` and raises a runtime error with the resulting string as the message (rewrite: `THROW`).
+
 - `MAIN():INT` — Returns `1` when the call site belongs to the primary program file (the file passed as the interpreter's first argument, or `<string>` when `-source` is used). Returns `0` when executed from code that came from an `IMPORT` (including nested imports). The result is determined solely by the source file that contains the call expression, not by the caller's call stack.
+
 - `DEL(SYMBOL: x)` ; delete variable `x` from environment
+
 - `EXIT()` or `EXIT(INT:code)` — Requests immediate termination of the interpreter. If an integer `code` is supplied, it is used as the interpreter's process exit code; otherwise `0` is used. Execution stops immediately when `EXIT` is executed (no further statements run), and an entry is recorded in the state log to make deterministic replay possible. Using `EXIT` inside a function terminates the entire program (not just the function).
+
 - `INT(STR: x):INT` ; `STR` -> `INT` using empty/01/other rules; `INT` passthrough
+
 - `STR(INT: x):STR` ; `INT` -> binary-spelled `STR`; `STR` passthrough
+
 - `BYTES(INT: n, endian = "big"):TNS` — Converts a non-negative integer into its byte representation. The optional `endian` parameter controls byte order: if `endian` is `"little"` the result is little-endian (least-significant byte first); if `endian` is `"big"` the result is big-endian (most-significant byte first). The result is a one-dimensional `TNS` whose elements are `INT` values in the range `0..11111111` (0-255 decimal). The tensor length is `max(1, ceil(bit_length(n)/8))`; `BYTES(0)` returns a single zero byte. Supplying a negative integer is a runtime error. Supplying an `endian` value other than `"big"` or `"little"` is a runtime error.
+
 - Binary literal: optional leading `-` (spaces/tabs/CR allowed after the dash) then `{0,1}+`
-- String literal: `"` characters `"` (no escapes, no newlines)
+
+- String literal: `"` characters `"` (supports escape codes; no newlines)
+
 - `EXIST(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists in the current environment (searching enclosing environments), else `0`. The argument must be an identifier; supplying an expression that is not a plain identifier is a runtime error.
+
 - `ISINT(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `INT`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
+
 - `ISSTR(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `STR`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
+
 - `ISTNS(SYMBOL: x):INT` ; returns `1` if the identifier `x` exists and is of type `TNS`, otherwise returns `0`. The argument must be an identifier; supplying any other expression is a runtime error.
+
 - `TYPE(ANY: obj):STR` ; returns the runtime type name of `obj` as a `STR` — one of `INT`, `FLT`, `STR`, or `TNS` (extension-defined type names are returned unchanged when extensions are enabled).
+
 - `SIGNATURE(SYMBOL: sym):STR` ; returns a textual signature for the identifier `sym`. If `sym` denotes a user-defined function (`FUNC`) the result is formatted in the canonical form used in this specification, e.g. `FUNC name(T1: arg1, T2: arg2 = default):R`. For other bound symbols the result is `TYPE: symbol` (for example `INT: x`). The argument must be a plain identifier.
+
 - `SER(INT|FLT|STR|TNS|MAP: obj):STR` ; return a `STR` containing a compact JSON representation of `obj` that encodes runtime type information. Encoding rules (summary): `INT` values are encoded as binary-digit strings (with a leading `-` for negatives), `FLT` values as decimal text via `repr()`, `STR` values as raw strings, `TNS` values as an object with `shape` (list of `INT` lengths) and a flat list of serialized elements, and `MAP` values as a list of key/value entries where keys are encoded with their native type (`INT`, `FLT`, or `STR`) and values are recursively serialized. `FUNC` and `THR` values are represented by a descriptive form but cannot be reliably reconstructed by `UNSER`.
+
 - `UNSER(STR: obj):INT|FLT|STR|TNS|MAP` ; reverse of `SER`. Given a string produced by `SER`, reconstruct the original runtime value for `INT`, `FLT`, `STR`, `TNS`, and `MAP` values. If the encoded value is a `FUNC` or `THR` (or the input is otherwise invalid), `UNSER` raises a runtime error.
+
 - `COPY(ANY: obj):ANY` ; return a shallow copy of `obj`. For `INT`, `FLT`, `STR`, and `FUNC` this produces a same-typed value wrapper. For `TNS` it returns a newly-allocated tensor with the same shape whose elements reference the original element values (shallow). For `MAP` it returns a new map with the same keys and the same value references (shallow).
+
 - `DEEPCOPY(ANY: obj):ANY` ; return a deep copy of `obj`. Recursively copies container values so that the returned value shares no mutable container objects with the original: tensors are duplicated element-by-element and maps are duplicated with their values deep-copied. Primitive values (`INT`, `FLT`, `STR`, and `FUNC`) are treated as atomic and copied by value.
+
 - `SLEN(STR: s):INT` returns the length of the supplied `STR` in characters as an `INT`. The argument must be a `STR`; passing an `INT` raises a runtime error.
+
 - `ILEN(INT: n):INT` returns the length in binary digits of the absolute value of the supplied `INT`. `ILEN(0)` returns 1. The argument must be an `INT`; passing a `STR` raises a runtime error.
 
 - `IN(ANY: value, TNS: tensor):INT` ; returns `1` if `value` is equal to any element of `tensor` (using the language's equality semantics), otherwise `0`.
 
 ### 12.2 Arithmetic (`INT` only)
+
 - `ADD(INT: a, INT: b):INT` ; a + b
+
 - `SUB(INT: a, INT: b):INT` ; a - b
+
 - `MUL(INT:a, INT:b):INT` ; a * b
+
 - `DIV(INT: a, INT: b):INT` ; floor(a / b)
+
 - `CDIV(INT: a, INT: b):INT` ; ceil(a / b)
+
 - `POW(INT: a, INT: b):INT` ; a ^ b
+
 - `ROOT(INT|FLT: x, INT|FLT: n):INT|FLT` ; nth root of `x`. No mixing of `INT` and `FLT` is allowed. For `INT` arguments `n` must be non-zero; positive `n` returns the integer nth root (largest integer r with r^n <= x for x >= 0); negative `n` yields an integer result only for `x` equal to `1` or `-1` (reciprocal is integer), and `x < 0` requires odd `n`. For `FLT` arguments the result is `x^(1/n)` (negative `n` allowed); negative `x` is allowed only when `n` is an odd integer. Division by zero is an error.
+
 - `MOD(INT: a, INT: b):INT` ; remainder of a / b
+
 - `NEG(INT: a):INT` ; -a (additive inverse)
+
 - `ABS(INT: a):INT` ; absolute value of a
+
 - `GCD(INT: a, INT: b):INT` ; greatest common divisor of a and b
+
 - `LCM(INT: a, INT: b):INT` ; least common multiple of a and b
 
 ### 12.3 Bitwise / Boolean
+
 - `BAND(INT: a, INT: b):INT` ; bitwise AND
+
 - `BOR(INT: a, INT: b):INT` ; bitwise OR
+
 - `BXOR(INT: a, INT: b):INT` ; bitwise XOR
+
 - `BNOT(INT: a):INT` ; bitwise NOT
+
 - `SHL(INT: a, INT: b):INT` ; shift left
+
 - `SHR(INT: a, INT: b):INT` ; shift right
+
 - `SLICE(INT|STR: a, INT: hi, INT: lo):INT|STR` ; `INT` target -> bit-slice [hi:lo]; `STR` target -> inclusive char-slice counting from the right (index 0 = last char). `TNS` are not accepted.
+
 - `AND(ANY: a1, ..., ANY: aN):INT` ; Boolean AND
+
 - `OR(ANY: a1, ..., ANY: aN):INT` ; Boolean OR
+
 - `XOR(ANY: a1, ..., ANY: aN):INT` ; Boolean XOR
+
 - `NOT(ANY: a):INT` ; Boolean NOT
+
 - `BOOL(ANY: item):INT` ; returns the truthiness of `item` as `INT` (`INT`: non-zero -> `1`, `STR`: non-empty -> `1`, `TNS`: true if any element is true), otherwise `0`, `THR` is true if it is not stopped, `MAP` is true if it has any entries.
 
 ### 12.4 Comparisons
+
 - `EQ(ANY: a, ANY: b):INT` ; 1 if a == b else 0
+
 - `GT(INT|FLT: a, INT|FLT: b):INT` ; 1 if a > b else 0 (no mixing INT/FLT)
+
 - `LT(INT|FLT: a, INT|FLT: b):INT` ; 1 if a < b else 0 (no mixing INT/FLT)
+
 - `GTE(INT|FLT: a, INT|FLT: b):INT` ; 1 if a >= b else 0 (no mixing INT/FLT)
+
 - `LTE(INT|FLT: a, INT|FLT: b):INT` ; 1 if a <= b else 0 (no mixing INT/FLT)
 
 ### 12.5 Aggregates / Utilities
+
 - `MAX(INT|FLT|STR: a1, ..., INT|FLT|STR: aN):INT|FLT|STR` ; numeric max for `INT`/`FLT`, longest for `STR`; supplying tensors or mixing types is an error
+
 - `MAX(TNS: t1, ..., TNS: tN):INT|FLT|STR` ; flatten the provided tensors and return the largest scalar element according to the normal rules (numeric max for `INT`/`FLT`, longest for `STR`). All tensor elements must be scalar (`INT`, `FLT`, or `STR`) and share the same type. Mixing element types or including `TNS` elements (tensor-of-tensors) is an error.
+
 - `MIN(INT|FLT|STR: a1, ..., INT|FLT|STR: aN):INT|FLT|STR` ; numeric min for `INT`/`FLT`, shortest for `STR`; supplying tensors or mixing types is an error
+
 - `MIN(TNS: t1, ..., TNS: tN):INT|FLT|STR` ; flatten the provided tensors and return the smallest scalar element according to the normal rules (numeric min for `INT`/`FLT`, shortest for `STR`). All tensor elements must be scalar (`INT`, `FLT`, or `STR`) and share the same type. Mixing element types or including `TNS` elements (tensor-of-tensors) is an error.
+
 - `SUM(INT|FLT: a1, ..., INT|FLT: aN):INT|FLT` ; sum of the arguments (no mixing INT/FLT)
+
 - `LEN(INT|STR: a1, ..., INT|STR: aN):INT` ; number of arguments (N), rejects tensors
+
 - `ALL(ANY: a1, ..., ANY: aN):INT` ; Boolean AND (empty string -> false, non-empty -> true)
+
 - `ANY(ANY: a1, ..., ANY: aN):INT` ; Boolean OR (empty string -> false, non-empty -> true)
+
 - `JOIN(INT|STR: a1, INT|STR: a2, ..., INT|STR: aN):INT|STR` ; `INT` -> concatenate binary spellings with consistent sign; `STR` -> concatenate strings; mixing `INT` and `STR` or supplying tensors raises an error
+
 - `PROD(INT|FLT: a1, ..., INT|FLT: aN):INT|FLT` ; product of the arguments (no mixing INT/FLT)
 
 ### 12.6 Tensor operations
+
 - `SHAPE(TNS: tensor):TNS` — Returns the tensor's shape as a 1D `TNS` (vector) of `INT` lengths (one entry per dimension).
+
 - `TLEN(TNS: tensor, INT: dim):INT` — Returns the length of the specified 1-based dimension. Errors if `dim` is out of range.
+
 - `FLIP(INT|STR: obj):INT|STR` — For `INT` input, returns an `INT` whose binary-digit spelling is the reverse of the absolute-value binary spelling of `obj` (sign is preserved). For `STR` input, returns the character-reversed `STR`.
+
 - `TFLIP(TNS: obj, INT: dim):TNS` — Returns a new `TNS` with the elements along 1-based dimension `dim` reversed. Errors if `dim` is out of range.
+
 - `SCAT(TNS: src, TNS: dst, TNS: ind):TNS` — Returns a copy of `dst` with a rectangular slice replaced by `src`. `ind` must be a 2D tensor of `INT` pairs with shape `[TLEN(dst, 1), 10]` (binary `10` = decimal 2), i.e., one `[lo, hi]` row per destination dimension (rank; for example `rank = TLEN(SHAPE(dst), 1)`). Indices are 1-based; negatives follow the tensor indexing rules (for example, `-1` is the last element) and `0` is invalid. For each dimension, the inclusive span `hi - lo + 1` must equal the corresponding `src` dimension length, and all bounds must fall within `dst`. Elements outside the slice are copied from `dst` unchanged.
+
 - `FILL(TNS: tensor, ANY: value):TNS` — Returns a new tensor with the same shape as `tensor`, filled with `value`. The supplied value`s type must match the existing element type at every position.
+
 - `TNS(TNS: shape, ANY: value):TNS` — Creates a new `TNS` with the shape described by a 1D `TNS` of positive `INT` lengths, filled with `value`.
+
 - `CONV(TNS: x, TNS: kernel, INT: stride_w = 1, INT: stride_h = 1, INT: pad_w = 0, INT: pad_h = 0, TNS: bias = []):TNS` — Extended convolution operator.
 
   - Backward-compatible two-argument form: when called as `CONV(x, kernel)` the operator performs the original N-dimensional discrete convolution and returns a tensor with the same shape as `x`. Requirements and semantics from the original behavior remain unchanged: `kernel` must have the same rank as `x`, every kernel dimension length must be odd (so the kernel has a well-defined center), boundary sampling is clamped to the nearest valid index (replicate padding), and tensor element types must be uniformly `INT` or uniformly `FLT` within each tensor. If both tensors are `INT` the output is `INT`, otherwise the output is `FLT`.
 
   - 2-D multi-output extension (keyword form): when called with any of the keywords `stride_w`, `stride_h`, `pad_w`, `pad_h`, or `bias`, and when the input `x` is a 3-D WHC tensor (width, height, channels) and `kernel` is a 4-D tensor of shape `[kw, kh, in_c, out_c]`, `CONV` performs a multi-output 2-D convolution equivalent to the `CONV2D` helper in the standard library. In this mode:
-    - `pad_w` / `pad_h` specify zero-padding added to both sides of the width/height dimensions (padding value = 0). The padded input size is `in_w + 2*pad_w` by `in_h + 2*pad_h`.
-    - `stride_w` / `stride_h` specify the horizontal and vertical strides (default `1`).
-    - Output spatial dimensions are computed as `out_w = floor((p_w - kw) / stride_w) + 1` and `out_h = floor((p_h - kh) / stride_h) + 1` where `p_w = in_w + 2*pad_w`, `p_h = in_h + 2*pad_h`.
-    - If `bias` is supplied and is a 1-D `TNS` of length `out_c`, per-output-channel bias is added to each output channel; otherwise no bias is applied.
+
+  - `pad_w` / `pad_h` specify zero-padding added to both sides of the width/height dimensions (padding value = 0). The padded input size is `in_w + 2*pad_w` by `in_h + 2*pad_h`.
+
+  - `stride_w` / `stride_h` specify the horizontal and vertical strides (default `1`).
+
+  - Output spatial dimensions are computed as `out_w = floor((p_w - kw) / stride_w) + 1` and `out_h = floor((p_h - kh) / stride_h) + 1` where `p_w = in_w + 2*pad_w`, `p_h = in_h + 2*pad_h`.
+
+  - If `bias` is supplied and is a 1-D `TNS` of length `out_c`, per-output-channel bias is added to each output channel; otherwise no bias is applied.
+
     - The resulting tensor shape is `[out_w, out_h, out_c]` and numeric typing follows the usual rule: if both input and kernel are `INT` the output is `INT`, otherwise `FLT` (INT/FLT mixing is allowed and yields `FLT`).
+
     - Unknown keyword names result in a runtime error; keywords are optional and supplying only `x` and `kernel` preserves original N-D semantics.
 
   - Note: the two-argument N-D form remains available and unchanged. The keyword extension provides a convenient, backward-compatible way to express common 2-D CNN patterns (stride, explicit zero-padding, and optional bias) without requiring users to compose lower-level primitives manually.
+
 - `MADD/MSUB/MMUL/MDIV(TNS: x, TNS: y):TNS` — Elementwise addition, subtraction, multiplication, and division. Shapes must match; all elements must be `INT` or all `FLT` (no mixing). Division by zero is an error.
+
 - `MSUM(TNS: t1, ..., TNS: tN):TNS` — Elementwise sum across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
+
 - `MPROD(TNS: t1, ..., TNS: tN):TNS` — Elementwise product across tensors. Shapes must match; elements must be all `INT` or all `FLT` (no mixing).
+
 - `TADD/TSSUB/TMUL/TDIV/TPOW(TNS: x, INT|FLT: y):TNS` — Tensor-scalar arithmetic. Tensor elements and scalar must both be `INT` or both be `FLT` (no mixing). Division by zero is an error.
 
 ### 12.7 Map operations
+
 - `KEYS(MAP: map): TNS` - Return a 1-D `TNS` containing each of the keys in `map`, in insertion order. Each element of the returned tensor has the native key type (`INT`, `FLT`, or `STR`).
+
 - `VALUES(MAP: map): TNS` - Return a 1-D `TNS` containing each of the values in `map`, in insertion order. Each element of the returned tensor is the stored value and preserves its type (`INT`, `FLT`, `STR`, `TNS`, or `MAP`).
+
 - `KEYIN(INT|FLT|STR: key, MAP: map):INT` - Returns `1` if `map` contains `key` (matching by type and value), otherwise `0`.
+
 - `VALUEIN(ANY: value, MAP: map):INT` - Returns `1` if any value stored in `map` is equal to `value` using the language's equality semantics, otherwise `0`.
 
 ### 12.8 Concurrency
 
 - `PARALLEL(TNS: functions):INT` — Execute each element of `functions` in parallel. Each element must evaluate to a `FUNC` value; the interpreter invokes each function with no arguments (in separate worker threads) and waits for all workers to complete. Returns `INT` 0 on success. If any element is not a `FUNC` or any worker raises an error, `PARALLEL` raises a runtime error (rewrite: `PARALLEL`) and the failing worker's error is propagated.
+
 - `PARALLEL(FUNC: f1, FUNC: f2, ...):INT` — Variadic form: accept one or more `FUNC` values as direct arguments. Behaviour is equivalent to the tensor form: each supplied function is invoked in parallel with no arguments and the call waits for completion; returns `INT` 0 on success or raises on error.
+
 - `ASYNC{ block }:THR` — Expression form: start executing `block` asynchronously in a separate thread (while sharing the same namespace) and return a `THR` handle. In statement position, `ASYNC{ block }` is permitted and the returned handle is ignored.
+
 - `STOP(THR: thread):THR` — Cooperatively stop a running thread and mark it finished.
+
 - `AWAIT(THR: thread):THR` — Block until the thread is finished.
+
 - `PAUSE(THR: thread, FLT: seconds=-1):THR` — Pause execution while preserving the current location. If `seconds` is provided and is $\ge 0$, the thread is automatically resumed after that duration. Pausing an already-paused thread is a runtime error.
+
 - `RESUME(THR: thread):THR` — Resume a paused thread. Resuming a thread that is not paused is a runtime error.
+
 - `PAUSED(THR: thread):INT` — Returns `INT` 1 if `thread` is paused, otherwise `INT` 0.
+
 - `RESTART(THR: thread):THR` — Reinitialize and start executing the thread again.
 
 ### 12.9 Logarithms
+
 - `LOG(INT: a):INT` ; floor(log2(a)) for a > 0
+
 - `LOG(FLT: a):FLT` ; floor(log2(a)) for a > 0
+
 - `CLOG(INT: a):INT` ; ceil(log2(a)) for a > 0
 
 ### 12.10 Numeric conversions / predicates
+
 - `INT(ANY: a):INT` — Explicit conversion to integer. If `a` is `FLT`, conversion truncates toward zero.
+
 - `FLT(ANY: a):FLT` — Explicit conversion to float.
+
 - `TINT(TNS: obj):TNS` — Convert each scalar element of `obj` to `INT` using the `INT` conversion rules; raises a runtime error if any element cannot be converted.
+
 - `TFLT(TNS: obj):TNS` — Convert each scalar element of `obj` to `FLT` using the `FLT` conversion rules; raises a runtime error if any element cannot be converted.
+
 - `TSTR(TNS: obj):TNS` — Convert each scalar element of `obj` to `STR` using the `STR` conversion rules; raises a runtime error if any element cannot be converted.
+
 - `ISFLT(SYMBOL: name):INT` — 1 if `name` is bound and has type `FLT`, otherwise 0.
 
 ### 12.11 Rounding
+
 - `ROUND(FLT: float, STR: mode="floor", INT: ndigits=0):FLT` — Round `float` to `ndigits` places right of the radix point (binary places; `ndigits` may be negative). When exactly two arguments are supplied and the second is an `INT`, it is treated as `ndigits` with the mode defaulting to `"floor"`. Modes are:
+
   - `"floor"` — round toward $-\infty$
+
   - `"ceiling"` or `"ceil"` — round toward $+\infty$
+
   - `"zero"` — round toward zero
+
   - `"logical"` or `"half-up"` — round half away from zero
 
 ### 12.12 Module operations:
+
 - `IMPORT(MODULE: name)` or `IMPORT(MODULE: name, SYMBOL: alias)` — Loads another source file and exposes it as a distinct module namespace. When an optional alias identifier is supplied, the imported module's bindings are exposed under the `alias` prefix rather than the module's own name (for example, `IMPORT(mod, ali)` makes `ali.F()` valid while `mod.F()` is not).
+
 - `IMPORT_PATH(STR: path)` — Loads an ASM-Lang module from the absolute filesystem `path` provided as a `STR`. The argument must be an absolute path to a `.asmln` source file. The imported module is treated the same as `IMPORT` with respect to parsing, execution isolation, function/module caching, and companion extension loading (companion `<module>.asmxt` alongside the resolved file and a built-in `ext/<module>.py` are both checked and loaded if present). The module's basename (filename without extension) is used as the module identifier for qualifying exported bindings.
 
   The first argument must be an identifier naming a module; the interpreter first looks for a file named `<name>.asmln` in the same directory as the referring source file. When the referring source is provided via the `-source` string literal mode, the primary search directory is the process's current working directory. If the module file is not found there, the interpreter will additionally attempt to load the file from a `lib` subdirectory located alongside the interpreter implementation (that is, `<interpreter_dir>/lib/<name>.asmln`, where `<interpreter_dir>` is the directory containing the interpreter script or executable).
@@ -553,61 +689,86 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
   This caching behavior ensures that importing a module multiple times produces the same shared module namespace instance for all importers. The interpreter does not automatically perform cycle detection beyond using the cached instance once execution has completed; careful module design should avoid import cycles where possible.
   
-  When a module is imported, the interpreter also attempts to load any associated runtime
-  extensions so their operators are immediately available to the importer. The
-  interpreter first looks for a companion pointer file named `<module>.asmxt`
-  next to the resolved module file (or in the interpreter `lib/` fallback) and
-  loads any extensions listed there. If no pointer file is present (or as an
-  additional fallback), the interpreter will also check its built-in `ext/`
-  directory for a single-file extension named `<module>.py` and load it if
-  present. Operators registered by such extensions are attached to the running
-  interpreter at import time and become callable (typically under the
-  module-qualified names they register).
-- `EXPORT(SYMBOL: symbol, MODULE: module):INT` — Adds the caller's binding for the identifier `symbol` into the namespace of the imported module named by the identifier `module`. The first argument must be an identifier (not a string literal); its current value in the caller's environment is copied into the imported module's namespace and becomes available as the qualified name `module.symbol` in the caller's environment. The second argument must be an identifier naming a previously-imported module; if the module has not been imported yet, the interpreter raises a runtime error (rewrite: EXPORT). `EXPORT` returns `INT` 0 on success.
+  When a module is imported, the interpreter also attempts to load any associated runtime extensions so their operators are immediately available to the importer. The interpreter first looks for a companion pointer file named `<module>.asmxt` next to the resolved module file (or in the interpreter `lib/` fallback) and loads any extensions listed there. If no pointer file is present (or as an additional fallback), the interpreter will also check its built-in `ext/` directory for a single-file extension named `<module>.py` and load it if present. Operators registered by such extensions are attached to the running interpreter at import time and become callable (typically under the module-qualified names they register).
+
+    - `EXPORT(SYMBOL: symbol, MODULE: module):INT` — Adds the caller's binding for the identifier `symbol` into the namespace of the imported module named by the identifier `module`. The first argument must be an identifier (not a string literal); its current value in the caller's environment is copied into the imported module's namespace and becomes available as the qualified name `module.symbol` in the caller's environment. The second argument must be an identifier naming a previously-imported module; if the module has not been imported yet, the interpreter raises a runtime error (rewrite: EXPORT). `EXPORT` returns `INT` 0 on success.
 
 ### 12.13 File operations:
+
 - `READFILE(STR: path, STR: coding=\"UTF-8\"):STR` — Reads the file at `path` and returns its contents as a `STR`. Supported `coding` values (case-insensitive) are `UTF-8`, `UTF-8 BOM`, `UTF-16 LE`, `UTF-16 BE`, `ANSI` (Windows-1252 on Windows, Latin-1 elsewhere), `binary` (alias `bin`), and `hexadecimal` (alias `hex`). Text codings decode with replacement on invalid bytes; `UTF-8` tolerates and strips a BOM if present. `binary` returns an 8-bit-per-byte bitstring; `hexadecimal` returns a lowercase hexadecimal string. If the file cannot be opened or read, the interpreter raises a runtime error (rewrite: `READFILE`).
+
 - `WRITEFILE(STR: blob, STR: path, STR: coding=\"UTF-8\"):INT` — Writes `blob` to `path` using the same `coding` options as `READFILE`. Text codings write in the specified encoding (`UTF-8 BOM` emits a BOM; `ANSI` maps to Windows-1252 on Windows, Latin-1 elsewhere). `binary` expects a bitstring of 0/1 characters whose length is a multiple of 8; `hexadecimal` expects valid hexadecimal. On I/O failure the call returns `INT` 0; invalid coding or malformed binary/hex data raises a runtime error (rewrite: `WRITEFILE`).
+
 - `EXISTFILE(STR: path):INT` — Returns `INT` 1 when a filesystem object exists at `path`, otherwise returns `INT` 0. The argument must be a `STR`.
 
 ### 12.14 Symbol Freezing:
+
 - `FREEZE(SYMBOL: symbol):INT` — Marks the identifier `symbol` as frozen. The first argument must be an identifier (not a string literal). On success `FREEZE` returns `INT` 0. Once a binding is frozen, any attempt to reassign it (via `=` assignment) or to delete it (`DEL`) raises a runtime error (assign attempts signal rewrite: `ASSIGN`; deletion attempts signal rewrite: `DEL`). `FREEZE` locates the binding in the usual lexical environment chain and freezes that specific binding; if the identifier is undefined, the call raises a runtime error (rewrite: `FREEZE`).
+
 - `THAW(SYMBOL: symbol):INT` — Unfreezes a previously-frozen identifier. The single argument must be an identifier (not a string literal). On success `THAW` returns `INT` 0. If the identifier is undefined the call raises a runtime error (rewrite: `THAW`). If the identifier has been permanently frozen by `PERMAFREEZE`, calling `THAW` raises a runtime error and the binding remains frozen (rewrite: `THAW`). Calling `THAW` on an identifier that is not frozen is a no-op and succeeds.
+
 - `PERMAFREEZE(SYMBOL: symbol):INT` — Permanently freezes the identifier `symbol`. The argument must be an identifier (not a string literal). On success `PERMAFREEZE` returns `INT` 0. A permanently-frozen identifier cannot later be thawed; attempts to call `THAW` on such an identifier raise a runtime error (rewrite: `THAW`). As with `FREEZE`, `PERMAFREEZE` locates the binding in the lexical environment chain and applies the permanent-freeze to that specific binding; if the identifier is undefined the call raises a runtime error (rewrite: `PERMAFREEZE`).
+
 - `FROZEN(SYMBOL: symbol):INT` — Returns `INT` -1 when the named identifier binding is permanently frozen (was previously frozen via `PERMAFREEZE`). If the binding is frozen but not permanently (was frozen via `FREEZE`) the call returns `INT` 1. Otherwise it returns `INT` 0. The single argument must be an identifier (not a string literal). If the identifier is undefined the call returns `INT` 0.
+
 - `PERMAFROZEN(SYMBOL: symbol):INT` — Returns `INT` 1 when the named identifier binding is permanently frozen (was previously frozen via `PERMAFREEZE`), otherwise returns `INT` 0. The single argument must be an identifier (not a string literal). If the identifier is undefined the call returns `INT` 0.
 
 ### 12.15 Command Line:
-- `CL(`STR`: command):INT` — Executes the provided `command` string using the host shell and returns the subprocess exit code as an `INT`. The `command` argument must be a `STR`. On a failure to start the subprocess (for example if the system cannot invoke a shell), the interpreter raises a runtime error (rewrite: CL). The call records a `CL` event in the execution I/O log containing the command text and returned exit code, enabling deterministic logging and replay.
+
+- `CL(STR: command):INT` — Executes the provided `command` string using the host shell and returns the subprocess exit code as an `INT`. The `command` argument must be a `STR`. On a failure to start the subprocess (for example if the system cannot invoke a shell), the interpreter raises a runtime error (rewrite: CL). The call records a `CL` event in the execution I/O log containing the command text and returned exit code, enabling deterministic logging and replay.
+
 - `SHUSH():INT` — Suppresses forwarding of console output to the configured output sink. While shushed, calls that would normally print to the console (for example, `PRINT` and output captured from `CL`) do not forward their text to the interpreter's output sink, though the interpreter continues to record the corresponding I/O events in the execution log for deterministic replay. `INPUT` prompts are still forwarded even when shushed. The `RUN`  operator temporarily disables shushing for the duration of the executed source, so any output produced by code run via `RUN` is forwarded regardless of the current shush state. `SHUSH` takes no arguments and returns `INT` 0 on success.
+
 - `UNSHUSH():INT` — Re-enables forwarding of console output that was previously suppressed by `SHUSH`. Calling `UNSHUSH` clears the shush state so subsequent side-effecting calls that normally produce console output (for example, `PRINT` and output captured from `CL`) are forwarded to the configured output sink. `UNSHUSH` takes no arguments and returns `INT` 0 on success. The interpreter continues to record I/O events in the execution log for deterministic replay; `INPUT` prompts and `RUN` behaviour are unchanged (that is, `INPUT` is always forwarded and `RUN` still temporarily disables shushing while it runs).
 
 ### 12.16 Host and environment information:
+
 - `OS():STR` — Returns a short, lowercase ASCII string identifying the host operating-system family. Typical values include `win` for Windows, `linux` for Linux, `macos` for macOS, and `unix` for other Unix-like platforms. The call takes no arguments and returns a `STR`.
+
 - `ARGV():TNS` — Returns the interpreter's argument vector as a one-dimensional `TNS` of `STR`. The tensor's elements are the command-line argument strings supplied to the process, in the same order as the process `argv`, with index 1 holding the interpreter's invocation entry (TNS indices are 1-based).
 
 ### 12.17 Control / Function / Statement Signatures (statement position)
+
 - Assignment: `TYPE : identifier = expression` on first use; subsequent assignments omit TYPE but must match the original type. TYPE is `INT`, `FLT`, `STR`, or `TNS`. Tensor elements may be reassigned with `identifier[i1,...,iN] = expression` (indices are 1-based with negative-index support, and the stored type at that element must not change).
+
 - Block: `{ statement1 ... statementN }`
+
 - `IF(condition){ block }` (optional `ELSEIF(condition){ block }` ... `ELSE{ block }`)
+
 - `WHILE(condition){ block }`
+
 - `FOR(counter, INT: target){ block }` ; `counter` initialized to 0, loop until counter >= target
+
 - `PARFOR(counter, INT: target){ block }` ; concurrently execute `target` iterations with `counter` bound to `1..T`. Iteration bodies run in parallel (threaded) and may race on shared mutable identifiers. `CONTINUE()` ends the current iteration only; `BREAK(n)` terminates the entire `PARFOR` (prevents starting further iterations, waits for in-flight iterations to finish, then propagates the `BreakSignal`). Runtime errors raised inside iterations are collected and the first such error is re-raised after all iterations join.
+
 - `FUNC name(T1: arg1, T2: arg2, ..., TN: argN):R{ block }` ; typed function definition with return type R (`INT`, `STR`, or `TNS`); optional defaults use `Tk: arg = expr` and must appear only after all positional parameters. Functions with return type `TNS` must explicitly execute `RETURN(value)`; there is no implicit default tensor value.
+
 - `RETURN(ANY: a)` ; return from function with value `a`
+
 - `POP(SYMBOL: x)` — Convenience statement combining `RETURN` and `DEL`: when executed inside a function body it retrieves the current value of the identifier `x`, deletes the binding `x` from the environment (so subsequent references are an error), and returns the retrieved value to the caller. Using `POP` outside of a function is a runtime error.
+
 - `BREAK(INT: n)` ; break out of the innermost `n` enclosing loops; raises a runtime error if `n` ≤ 0 or if `n` is greater than the current loop nesting depth
+
 - `CONTINUE()` ; skip remaining statements in the innermost loop iteration and proceed to the next iteration; if used in the last iteration it acts like `BREAK(1)`. Using `CONTINUE()` outside of a loop is a runtime error.
+
 - `GOTOPOINT(INT|STR: n)` ; register a gotopoint with identifier `n` at this statement's location (identifier may be `INT` or `STR`) (n evaluated at runtime). Gotopoints are visible across the containing function or top-level scope rather than being restricted to a single lexical block.
+
 - `GOTO(INT|STR: n)` ; jump to a previously-registered gotopoint with identifier `n` (`INT` or `STR`) within the same function or top-level scope; runtime error if not registered in that scope
+
 - `ASYNC{ block }` ; execute `block` asynchronously in a separate thread (while sharing the same namespace); the caller continues executing immediately without waiting for the async block to complete. Any uncaught errors in the async block are logged to the interpreter's error log but do not affect the caller. When used in expression position, `ASYNC{ block }` evaluates to a `THR` handle. If the expression is used as an argument to a surrounding call expression, the worker thread's start is deferred until that enclosing call completes so that the callee may operate on the `THR` (for example, `PAUSE` or `STOP`) before the worker runs; in statement position the worker starts immediately and the returned handle is ignored.
+
 - `THR(SYMBOL: symbol){ block }` ; execute `block` asynchronously in a separate thread and bind the identifier `symbol` (static type `THR`) to the thread handle.
+
 - `TRY{ block }CATCH{ block }` ; execute `block` in the `TRY` and, if an interpreter-level runtime error occurs during the `TRY` block, stop the `TRY` and execute the directly-following `CATCH` block. If no error occurs, the `CATCH` block is skipped.
+
 - `TRY{ block }CATCH(SYMBOL: name){ block }` ; like the previous form but bind a temporary `STR` symbol `name` visible inside the `CATCH` block containing the error message. The temporary symbol shadows any existing binding for `name` and is restored or removed after the `CATCH` block completes.
 
 ### 12.18 Notes
+
 - Built-ins are statically typed. Boolean contexts treat `INT` 0 as false and non-zero as true; `FLT` is false when 0.0 and true otherwise; `STR` is false when empty and true when non-empty unless a rule explicitly converts via `INT`. A `TNS` is true if any element is true by those rules.
+
 - Argument evaluation order: left-to-right.
+
 - User-defined functions use the same call syntax as built-ins; keyword arguments are permitted only after positional arguments and only for parameters that declare defaults. Built-ins reject keyword arguments except that `READFILE` and `WRITEFILE` accept an optional `coding=` keyword. When a keyword parameter is omitted, its default expression is evaluated at call time in the function's defining environment.
 
 

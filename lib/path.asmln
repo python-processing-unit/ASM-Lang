@@ -13,11 +13,11 @@
 # STR: script_dir
 
 FUNC NORMALIZE_PATH(STR: path):STR{
-    RETURN(REPLACE(path,"\","/"))
+    RETURN(REPLACE(path,"\\","/"))
 }
 
 FUNC WINPATH(STR: path):STR{
-    RETURN(REPLACE(path,"/","\"))
+    RETURN(REPLACE(path,"/","\\"))
 }
 
 FUNC BASEPATH(STR: path):STR{ # returns directory portion of path

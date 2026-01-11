@@ -69,8 +69,8 @@ FUNC STDLIB_TESTS():INT{
     PRINT("Decimal library tests passed.")
 
     # Path library tests
-    ASSERT( EQ(path.NORMALIZE_PATH("a\b\c"), "a/b/c") )
-    ASSERT( EQ(path.WINPATH("a/b/c"), "a\b\c") )
+    ASSERT( EQ(path.NORMALIZE_PATH("a\\b\\c"), "a/b/c") )
+    ASSERT( EQ(path.WINPATH("a/b/c"), "a\\b\\c") )
     ASSERT( EQ(path.BASENAME("a/b/c.txt"), "c.txt") )
     ASSERT( EQ(path.EXTNAME("foo.bar"), "bar") )
     ASSERT( EQ(path.DELEXT("foo.bar"), "foo") )
@@ -288,7 +288,7 @@ FUNC STDLIB_TESTS():INT{
     ASSERT(EQ(image.SAVE_BMP(bmp, out_bmp), "OK"))
     TNS: bmp_rt = image.LOAD_BMP(out_bmp)
     IF(EQ(OS(),"win")){
-        CL(JOIN('del "', REPLACE(out_bmp,'/','\'), '"'))
+        CL(JOIN('del "', REPLACE(out_bmp,'/','\\'), '"'))
     } ELSE {
         CL(JOIN('rm "', out_bmp, '"'))
     }
@@ -299,7 +299,7 @@ FUNC STDLIB_TESTS():INT{
     ASSERT(EQ(image.SAVE_PNG(bmp, out_png, 1010), "OK"))
     TNS: png_rt = image.LOAD_PNG(out_png)
     IF(EQ(OS(),"win")){
-        CL(JOIN('del "', REPLACE(out_png,'/','\'), '"'))
+        CL(JOIN('del "', REPLACE(out_png,'/','\\'), '"'))
     } ELSE {
         CL(JOIN('rm "', out_png, '"'))
     }
@@ -311,7 +311,7 @@ FUNC STDLIB_TESTS():INT{
     ASSERT(EQ(image.SAVE_JPEG(bmp, out_jpeg, 1011111), "OK"))
     TNS: jpeg_rt2 = image.LOAD_JPEG(out_jpeg)
     IF(EQ(OS(),"win")){
-        CL(JOIN('del "', REPLACE(out_jpeg,'/','\'), '"'))
+        CL(JOIN('del "', REPLACE(out_jpeg,'/','\\'), '"'))
     } ELSE {
         CL(JOIN('rm "', out_jpeg, '"'))
     }
