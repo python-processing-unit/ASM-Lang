@@ -534,6 +534,7 @@ class Builtins:
         self._register_custom("KEYS", 1, 1, self._keys)
         self._register_custom("VALUES", 1, 1, self._values)
         self._register_custom("KEYIN", 2, 2, self._keyin)
+        self._register_custom("MATCH", 2, 3, self._match)
         self._register_custom("VALUEIN", 2, 2, self._valuein)
         self._register_custom("INV", 1, 1, self._inv)
         self._register_custom("EXPORT", 2, 2, self._export)
@@ -1259,6 +1260,50 @@ class Builtins:
             if interpreter._values_equal(needle, v):
                 return Value(TYPE_INT, 1)
         return Value(TYPE_INT, 0)
+
+    def _match(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        # MATCH(MAP: map, MAP: template, INT: typing = 0):INT
+        # Return 1 if every key in `template` is present in `map`.
+        # If `typing` is true (non-zero), also require the types of the
+        # associated values to match between the two maps.
+        if len(args) not in (2, 3):
+            raise ASMRuntimeError("MATCH requires two or three arguments", location=location, rewrite_rule="MATCH")
+        mval = args[0]
+        tval = args[1]
+        typing_flag = Value(TYPE_INT, 0)
+        if len(args) == 3:
+            typing_flag = args[2]
+
+        if mval.type != TYPE_MAP:
+            raise ASMRuntimeError("MATCH expects a MAP as first argument", location=location, rewrite_rule="MATCH")
+        if tval.type != TYPE_MAP:
+            raise ASMRuntimeError("MATCH expects a MAP as second argument", location=location, rewrite_rule="MATCH")
+        if typing_flag.type != TYPE_INT:
+            raise ASMRuntimeError("MATCH expects typing flag to be INT", location=location, rewrite_rule="MATCH")
+
+        m = mval.value
+        t = tval.value
+        assert isinstance(m, Map) and isinstance(t, Map)
+
+        require_typing = 0 if typing_flag.value == 0 else 1
+
+        for key in t.data.keys():
+            if key not in m.data:
+                return Value(TYPE_INT, 0)
+            if require_typing:
+                mv = m.data[key]
+                tv = t.data[key]
+                if mv.type != tv.type:
+                    return Value(TYPE_INT, 0)
+
+        return Value(TYPE_INT, 1)
 
     def _inv(
         self,

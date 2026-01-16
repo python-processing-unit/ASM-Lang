@@ -286,6 +286,21 @@ FUNC BUILTIN_TESTS():INT{
     ASSERT( EQ( inv2<10>, "two" ) )
     DEL(inv2<1>)
     ASSERT( EQ( KEYIN(1, inv2), 0 ) )
+    # MATCH operator tests
+    MAP: tmpl1 = < "one" = 1 >
+    MAP: tmpl2 = < "one" = "x" >
+    ASSERT( EQ( MATCH(mm2, tmpl1), 1 ) )
+    ASSERT( EQ( MATCH(mm2, tmpl2), 1 ) )
+    ASSERT( EQ( MATCH(mm2, tmpl1, 1), 1 ) )
+    ASSERT( EQ( MATCH(mm2, tmpl2, 1), 0 ) )
+    MAP: tmpl3 = < "one" = 1, "two" = 10 >
+    ASSERT( EQ( MATCH(mm2, tmpl3), 1 ) )
+    MAP: tmpl4 = < "three" = 1 >
+    ASSERT( EQ( MATCH(mm2, tmpl4), 0 ) )
+    DEL(tmpl1)
+    DEL(tmpl2)
+    DEL(tmpl3)
+    DEL(tmpl4)
     DEL(ks)
     DEL(vs)
     DEL(inv2)
