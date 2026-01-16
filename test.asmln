@@ -43,7 +43,7 @@ FUNC BUILTIN_TESTS():INT{
     # Line continuation (caret ^) inside a tensor literal and index expressions
     TNS: cont = [ ^
         [1, 10, 11], ^
-        [100, 101, 110] ^
+        [100, 101, 110] ^# carets allowed before code notes
     ]
     ASSERT( EQ( TLEN(cont, 1), 10 ) )
     DEL(cont)
@@ -268,6 +268,15 @@ FUNC BUILTIN_TESTS():INT{
     ASSERT( EQ( parts[11], "c" ) )
     DEL(parts)
 
+    # New: TNS from a STR should produce a 1-D tensor of single-character STRs
+    TNS: chars = TNS("foo")
+    ASSERT( EQ( TLEN(chars, 1), 11 ) )
+    ASSERT( EQ( chars[1], "f" ) )
+    ASSERT( EQ( chars[10], "o" ) )
+    ASSERT( EQ( chars[11], "o" ) )
+    ASSERT( EQ( TNS("foo"), ["f","o","o"] ) )
+    DEL(chars)
+
     # Maps: KEYS/VALUES/KEYIN/VALUEIN/INV and indexed DEL
     MAP: mm2 = < "one" = 1, "two" = 10 >
     TNS: ks = KEYS(mm2)
@@ -428,6 +437,7 @@ FUNC BUILTIN_TESTS():INT{
     }
 
     ASSERT( EQ( IMPORT_PATH(mod_path), 0 ) )
+    DELETEFILE("tmpmod.asmln")
     ASSERT( EQ( tmpmod.v, 1 ) )
     ASSERT( EQ( tmpmod.G(), 10 ) )
 

@@ -75,7 +75,7 @@ The program text is divided into several token kinds: binary integer literals (S
 
 Keywords: The language's reserved keywords (for example, `IF`, `WHILE`, `FUNC`, etc.) are matched by the lexer exactly as listed in this specification and are case-sensitive. Programs must use the keywords in their canonical uppercase form; otherwise the token will be recognized as an identifier. Built-in operator names such as `INPUT`, `PRINT`, and `IMPORT` follow the same case-sensitive matching rules.
 
-Line continuation: The character `^` serves as a line-continuation marker. When a caret `^` appears in the source and is followed immediately by a newline, both the `^` and the newline are ignored by the lexer (that is, the logical line continues on the next physical line). If a `^` is present in a string, it does not count as a line continuation. If a caret appears and is not immediately followed by a newline (or the platform's single-character newline sequence), the lexer must raise a syntax error.
+Line continuation: The character `^` serves as a line-continuation marker. When a caret `^` appears in the source and is followed immediately by a newline, both the `^` and the newline are ignored by the lexer (that is, the logical line continues on the next physical line). The lexer also accepts a caret immediately before a code note (a comment beginning with `#`); in this case the `^`, the comment text up to the line terminator, and the terminating newline are treated as if they were not present. If a `^` is present in a string, it does not count as a line continuation. If a caret appears and is not immediately followed by a newline, a code note, or the platform's single-character newline sequence, the lexer must raise a syntax error.
 
 The character `-` primarily serves as the leading sign of a numeric literal (Section 3.1). When `-` appears immediately before optional whitespace and then binary digits, it is parsed as part of the numeric literal (that is, a signed literal). In other contexts (for example inside an index expression) a single `-` token is recognized as a dash used for slice notation `lo-hi`. If `-` appears in any other unsupported context the lexer must raise a syntax error.
 
@@ -658,6 +658,8 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 - `FILL(TNS: tensor, ANY: value):TNS` — Returns a new tensor with the same shape as `tensor`, filled with `value`. The supplied value`s type must match the existing element type at every position.
 
 - `TNS(TNS: shape, ANY: value):TNS` — Creates a new `TNS` with the shape described by a 1D `TNS` of positive `INT` lengths, filled with `value`.
+
+- `TNS(STR: string):TNS` — Converts a `STR` into a 1-D `TNS` of `STR` characters. Each element of the resulting tensor is a `STR` containing a single character from the input string. For example, `TNS("foo")` yields `["f","o","o"]`.
 
 - `CONV(TNS: x, TNS: kernel, INT: stride_w = 1, INT: stride_h = 1, INT: pad_w = 0, INT: pad_h = 0, TNS: bias = []):TNS` — Extended convolution operator.
 

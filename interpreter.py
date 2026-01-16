@@ -559,7 +559,7 @@ class Builtins:
         self._register_custom("SHAPE", 1, 1, self._shape)
         self._register_custom("TLEN", 2, 2, self._tlen)
         self._register_custom("FILL", 2, 2, self._fill)
-        self._register_custom("TNS", 2, 2, self._tns)
+        self._register_custom("TNS", 1, 2, self._tns)
         self._register_custom("TINT", 1, 1, self._tint)
         self._register_custom("TFLT", 1, 1, self._tflt)
         self._register_custom("TSTR", 1, 1, self._tstr)
@@ -3128,8 +3128,22 @@ class Builtins:
         ___: Environment,
         location: SourceLocation,
     ) -> Value:
-        shape_val = self._expect_tns(args[0], "TNS", location)
+        # New form: TNS(STR: string) -> 1-D TNS of STR characters
+        first = self._deref_pointer(args[0], rule="TNS", location=location)
+        if first.type == TYPE_STR:
+            s = self._expect_str(first, "TNS", location)
+            # Create a 1-D tensor of STR elements, one-character strings
+            length = len(s)
+            data = np.empty(length, dtype=object)
+            for i, ch in enumerate(s):
+                data[i] = Value(TYPE_STR, ch)
+            return Value(TYPE_TNS, Tensor(shape=[length], data=data))
+
+        # Original form: TNS(TNS: shape, ANY: value)
+        shape_val = self._expect_tns(first, "TNS", location)
         shape = self._shape_from_tensor(shape_val, "TNS", location)
+        if len(args) < 2:
+            raise ASMRuntimeError("TNS expects a fill value when called with a shape", location=location, rewrite_rule="TNS")
         fill_value = args[1]
         tensor = interpreter._make_tensor_from_shape(shape, fill_value, "TNS", location)
         return Value(TYPE_TNS, tensor)

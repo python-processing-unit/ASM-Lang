@@ -391,8 +391,29 @@ class Lexer:
             if self.index < len(self.text) and self.text[self.index] == "\n":
                 self._advance()
             return
+        # Allow a caret immediately before a code note (comment starting with '#').
+        # Treat '^#...<newline>' as a valid line-continuation: consume the '^',
+        # the comment text up to the line terminator, and then consume the newline.
+        if ch1 == "#":
+            # consume '^'
+            self._advance()
+            # consume comment text up to but not including the newline
+            self._consume_comment()
+            # Now require and consume a line terminator after the comment.
+            if self.index < self._n and self.text[self.index] == "\n":
+                self._advance()
+                return
+            if self.index < self._n and self.text[self.index] == "\r":
+                self._advance()
+                if self.index < self._n and self.text[self.index] == "\n":
+                    self._advance()
+                return
+            raise ASMParseError(
+                f"Invalid line continuation '^' before comment not terminated by newline at {self.filename}:{self.line}:{self.column}"
+            )
+
         raise ASMParseError(
-            f"Invalid line continuation '^' not followed by newline at {self.filename}:{self.line}:{self.column}"
+            f"Invalid line continuation '^' not followed by newline or code note at {self.filename}:{self.line}:{self.column}"
         )
 
     @property
