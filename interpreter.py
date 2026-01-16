@@ -549,6 +549,7 @@ class Builtins:
         self._register_custom("READFILE", 1, 2, self._readfile)
         self._register_custom("BYTES", 1, 2, self._bytes)
         self._register_custom("WRITEFILE", 2, 3, self._writefile)
+        self._register_custom("DELETEFILE", 1, 1, self._deletefile)
         self._register_custom("EXISTFILE", 1, 1, self._existfile)
         self._register_custom("CL", 1, 1, self._cl)
         self._register_custom("EXIT", 0, 1, self._exit)
@@ -2865,6 +2866,26 @@ class Builtins:
         path = self._expect_str(args[0], "EXISTFILE", location)
         return Value(TYPE_INT, 1 if os.path.exists(path) else 0)
 
+    def _deletefile(
+        self,
+        interpreter: "Interpreter",
+        args: List[Value],
+        __: List[Expression],
+        ___: Environment,
+        location: SourceLocation,
+    ) -> Value:
+        path = self._expect_str(args[0], "DELETEFILE", location)
+        # If the path does not exist, signal an explicit runtime error.
+        if not os.path.exists(path):
+            raise ASMRuntimeError(f"DELETEFILE: '{path}' does not exist", location=location, rewrite_rule="DELETEFILE")
+        try:
+            # Attempt to remove the filesystem object. Use os.remove to
+            # fail on directories; caller must ensure target is a file.
+            os.remove(path)
+        except OSError as exc:
+            raise ASMRuntimeError(f"Failed to delete '{path}': {exc}", location=location, rewrite_rule="DELETEFILE")
+        return Value(TYPE_INT, 1)
+
     # Tensor helpers
     def _shape_from_tensor(self, tensor: Tensor, rule: str, location: SourceLocation) -> List[int]:
         if len(tensor.shape) != 1:
@@ -3384,8 +3405,8 @@ class Builtins:
             lo_raw = self._expect_int(pairs[axis, 0], "SCAT", location)
             hi_raw = self._expect_int(pairs[axis, 1], "SCAT", location)
             dim_len = dst.shape[axis]
-            lo = self._resolve_tensor_index(lo_raw, dim_len, "SCAT", location)
-            hi = self._resolve_tensor_index(hi_raw, dim_len, "SCAT", location)
+            lo = interpreter._resolve_tensor_index(lo_raw, dim_len, "SCAT", location)
+            hi = interpreter._resolve_tensor_index(hi_raw, dim_len, "SCAT", location)
             if lo > hi:
                 raise ASMRuntimeError("SCAT expects lo <= hi for each dimension", location=location, rewrite_rule="SCAT")
             span = hi - lo + 1
