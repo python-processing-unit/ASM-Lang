@@ -582,10 +582,10 @@ FUNC STDLIB_TESTS():INT{
     PRINT("Running library tests...")
 
     # PRNG reproducibility (LCG)
-    prng.PRNG_SEED(1010)   # seed = 10
-    INT: a = prng.PRNG_NEXT()
-    prng.PRNG_SEED(1010)
-    INT: b = prng.PRNG_NEXT()
+    prng.SEED(1010)   # seed = 10
+    INT: a = prng.NEXT()
+    prng.SEED(1010)
+    INT: b = prng.NEXT()
     ASSERT( EQ(a, b) )
     DEL(a)
     DEL(b)

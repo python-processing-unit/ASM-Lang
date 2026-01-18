@@ -2235,12 +2235,15 @@ class Builtins:
 
         # Deleting a map key via indexed expression, e.g. DEL(map<k>)
         if isinstance(first, IndexExpression):
-            base_expr, index_nodes = interpreter._gather_index_chain(first)
+            base_expr, index_nodes, index_flags = interpreter._gather_index_chain(first)
             if not isinstance(base_expr, Identifier):
                 raise ASMRuntimeError("DEL expects identifier base for indexed deletion", location=location, rewrite_rule="DEL")
             base_val = interpreter._evaluate_expression(base_expr, env)
             if base_val.type != TYPE_MAP:
                 raise ASMRuntimeError("DEL indexed deletion requires a map base", location=location, rewrite_rule="DEL")
+            # Ensure the bracket form matches the base type: maps must use '<...>'
+            if not all(index_flags):
+                raise ASMRuntimeError("Map indexed deletion requires angle-brackets '<...>'", location=location, rewrite_rule="DEL")
             assert isinstance(base_val.value, Map)
             eval_expr = interpreter._evaluate_expression
             current_map = base_val.value
@@ -4576,7 +4579,7 @@ class Interpreter:
             env.set(statement.target, value, declared_type=statement.declared_type)
             return
         if statement_type is TensorSetStatement:
-            base_expr, index_nodes = self._gather_index_chain(statement.target)
+            base_expr, index_nodes, index_flags = self._gather_index_chain(statement.target)
             if type(base_expr) is not Identifier:
                 raise ASMRuntimeError(
                     "Indexed assignment requires identifier base",
@@ -4595,13 +4598,62 @@ class Interpreter:
 
             base_val = self._evaluate_expression(base_expr, env)
             base_val = self._deref_value(base_val, location=statement.location, rule="ASSIGN")
-            # MAP assignment path: support multi-key assignment like m<k1,k2> = v
-            if base_val.type == TYPE_MAP:
-                assert isinstance(base_val.value, Map)
+            
+            # Support mixed indexing for assignment: navigate through tensor and map indices.
+            # Process indices in groups of the same type, navigating down to the final container
+            # before performing the assignment.
+            
+            # If we have no indices, this is not a valid TensorSetStatement
+            if not index_nodes:
+                raise ASMRuntimeError("Indexed assignment requires at least one index", location=statement.location, rewrite_rule="ASSIGN")
+            
+            # Navigate through all but the last index to get to the container
+            current_val = base_val
+            i = 0
+            
+            # Find where the last index group starts
+            last_group_start = 0
+            last_is_map = index_flags[-1]
+            for idx in range(len(index_flags) - 1, -1, -1):
+                if index_flags[idx] != last_is_map:
+                    last_group_start = idx + 1
+                    break
+            
+            # Process all index groups except the last one
+            while i < last_group_start:
+                is_map = index_flags[i]
+                # Find the end of this group
+                j = i
+                while j < last_group_start and index_flags[j] == is_map:
+                    j += 1
+                
+                group_nodes = index_nodes[i:j]
+                
+                if not is_map:
+                    # Process tensor-style indices
+                    if current_val.type != TYPE_TNS:
+                        raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=statement.location, rewrite_rule="ASSIGN")
+                    current_val = self._index_tensor(current_val, group_nodes, env, statement.location)
+                else:
+                    # Process map-style indices
+                    if current_val.type != TYPE_MAP:
+                        raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=statement.location, rewrite_rule="ASSIGN")
+                    current_val = self._index_map(current_val, group_nodes, env, statement.location)
+                
+                i = j
+            
+            # Now handle the last index group for assignment
+            last_indices = index_nodes[last_group_start:]
+            new_value = self._evaluate_expression(statement.value, env)
+            
+            if last_is_map:
+                # Map assignment: traverse/create nested maps for all but the final key
+                if current_val.type != TYPE_MAP:
+                    raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=statement.location, rewrite_rule="ASSIGN")
+                assert isinstance(current_val.value, Map)
                 eval_expr = self._evaluate_expression
-                # Traverse/create nested maps for all but the final key
-                current_map_val = base_val
-                for idx_node in index_nodes[:-1]:
+                current_map_val = current_val
+                for idx_node in last_indices[:-1]:
                     key_val = eval_expr(idx_node, env)
                     if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
                         raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=statement.location, rewrite_rule="ASSIGN")
@@ -4615,12 +4667,11 @@ class Interpreter:
                         raise ASMRuntimeError("Cannot index into non-map value", location=statement.location, rewrite_rule="ASSIGN")
                     current_map_val = next_val
                 # Final key
-                final_key_node = index_nodes[-1]
+                final_key_node = last_indices[-1]
                 final_key_val = eval_expr(final_key_node, env)
                 if final_key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
                     raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=statement.location, rewrite_rule="ASSIGN")
                 final_key = (final_key_val.type, final_key_val.value)
-                new_value = self._evaluate_expression(statement.value, env)
                 existing = current_map_val.value.data.get(final_key)
                 if existing is not None and existing.type != new_value.type:
                     raise ASMRuntimeError(
@@ -4630,80 +4681,55 @@ class Interpreter:
                     )
                 current_map_val.value.data[final_key] = new_value
                 return
-
-            # Tensor assignment path (existing semantics)
-            if base_val.type != TYPE_TNS:
-                raise ASMRuntimeError(
-                    "Indexed assignment requires a tensor or map base",
-                    location=statement.location,
-                    rewrite_rule="ASSIGN",
-                )
-            assert isinstance(base_val.value, Tensor)
-            eval_expr = self._evaluate_expression
-            expect_int = self._expect_int
-            # Check if any index is a Range (slice). If none, mutate a single
-            # element as before. If ranges present, perform a slice assignment.
-            RangeT = Range
-            StarT = Star
-            has_range = any((type(n) is RangeT) or (type(n) is StarT) for n in index_nodes)
-            if not has_range:
-                indices: List[int] = []
-                indices_append = indices.append
-                for node in index_nodes:
-                    indices_append(expect_int(eval_expr(node, env), "ASSIGN", statement.location))
-                new_value = self._evaluate_expression(statement.value, env)
-                self._mutate_tensor_value(base_val.value, indices, new_value, statement.location)
+            else:
+                # Tensor assignment
+                if current_val.type != TYPE_TNS:
+                    raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=statement.location, rewrite_rule="ASSIGN")
+                assert isinstance(current_val.value, Tensor)
+                eval_expr = self._evaluate_expression
+                expect_int = self._expect_int
+                # Check if any index is a Range (slice). If none, mutate a single element.
+                RangeT = Range
+                StarT = Star
+                has_range = any((type(n) is RangeT) or (type(n) is StarT) for n in last_indices)
+                if not has_range:
+                    indices: List[int] = []
+                    indices_append = indices.append
+                    for node in last_indices:
+                        indices_append(expect_int(eval_expr(node, env), "ASSIGN", statement.location))
+                    self._mutate_tensor_value(current_val.value, indices, new_value, statement.location)
+                    return
+                
+                # Slice assignment path
+                arr = current_val.value.data.reshape(tuple(current_val.value.shape))
+                indexers: List[object] = []
+                for dim, node in enumerate(last_indices):
+                    node_type = type(node)
+                    if node_type is Range:
+                        lo_val = expect_int(eval_expr(node.lo, env), "ASSIGN", statement.location)
+                        hi_val = expect_int(eval_expr(node.hi, env), "ASSIGN", statement.location)
+                        lo_res = self._resolve_tensor_index(lo_val, current_val.value.shape[dim], "ASSIGN", statement.location)
+                        hi_res = self._resolve_tensor_index(hi_val, current_val.value.shape[dim], "ASSIGN", statement.location)
+                        indexers.append(slice(lo_res - 1, hi_res))
+                    elif node_type is Star:
+                        indexers.append(slice(None, None))
+                    else:
+                        raw = expect_int(eval_expr(node, env), "ASSIGN", statement.location)
+                        idx_res = self._resolve_tensor_index(raw, current_val.value.shape[dim], "ASSIGN", statement.location)
+                        indexers.append(idx_res - 1)
+                
+                # Evaluate RHS and ensure it is a tensor
+                if new_value.type != TYPE_TNS:
+                    raise ASMRuntimeError("Slice assignment requires tensor RHS", location=statement.location, rewrite_rule="ASSIGN")
+                assert isinstance(new_value.value, Tensor)
+                # Perform the slice assignment
+                rhs_arr = new_value.value.data.reshape(tuple(new_value.value.shape))
+                try:
+                    arr[tuple(indexers)] = rhs_arr
+                except (ValueError, IndexError, RuntimeError) as exc:
+                    raise ASMRuntimeError(f"Slice assignment failed: {exc}", location=statement.location, rewrite_rule="ASSIGN")
+                # The assignment mutated the view; no need to reassign
                 return
-
-            # Slice assignment path
-            arr = base_val.value.data.reshape(tuple(base_val.value.shape))
-            indexers: List[object] = []
-            for dim, node in enumerate(index_nodes):
-                node_type = type(node)
-                if node_type is Range:
-                    lo_val = expect_int(eval_expr(node.lo, env), "ASSIGN", statement.location)
-                    hi_val = expect_int(eval_expr(node.hi, env), "ASSIGN", statement.location)
-                    lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "ASSIGN", statement.location)
-                    hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "ASSIGN", statement.location)
-                    indexers.append(slice(lo_res - 1, hi_res))
-                elif node_type is Star:
-                    # Full-dimension slice `*` selects the entire axis
-                    indexers.append(slice(None, None))
-                else:
-                    raw = expect_int(eval_expr(node, env), "ASSIGN", statement.location)
-                    idx_res = self._resolve_tensor_index(raw, base_val.value.shape[dim], "ASSIGN", statement.location)
-                    indexers.append(idx_res - 1)
-
-            sel = arr[tuple(indexers)]
-            # Evaluate RHS and ensure it's a tensor of matching shape
-            new_value = self._evaluate_expression(statement.value, env)
-            if new_value.type != TYPE_TNS:
-                raise ASMRuntimeError("Slice assignment requires tensor value", location=statement.location, rewrite_rule="ASSIGN")
-            assert isinstance(new_value.value, Tensor)
-            sel_shape = list(sel.shape) if isinstance(sel, np.ndarray) else list(np.array(sel, dtype=object).shape)
-            if sel_shape != new_value.value.shape:
-                raise ASMRuntimeError("Slice assignment shape mismatch", location=statement.location, rewrite_rule="ASSIGN")
-
-            # Elementwise type check then mutate in place
-            sel_view = sel if isinstance(sel, np.ndarray) else np.array(sel, dtype=object)
-            sel_flat = sel_view.ravel()
-            new_flat = new_value.value.data.ravel()
-            if sel_flat.size != new_flat.size:
-                raise ASMRuntimeError("Slice assignment size mismatch", location=statement.location, rewrite_rule="ASSIGN")
-            # Verify element type compatibility
-            for i in range(sel_flat.size):
-                cur = sel_flat[i]
-                newv = new_flat[i]
-                if cur.type != newv.type:
-                    raise ASMRuntimeError("Tensor element type mismatch", location=statement.location, rewrite_rule="ASSIGN")
-            # Perform mutation on the original array view
-            # Use flat indexing into the original view to preserve object identity
-            target_view = arr[tuple(indexers)]
-            target_flat = target_view.ravel()
-            # Assign element-wise
-            for i in range(new_flat.size):
-                target_flat[i] = new_flat[i]
-            return
         if statement_type is ExpressionStatement:
             self._evaluate_expression(statement.expression, env)
             return
@@ -5315,21 +5341,102 @@ class Interpreter:
             raise ASMRuntimeError("Tensor literal size mismatch", location=literal.location, rewrite_rule="TNS")
         return Tensor(shape=shape, data=np.array(flat, dtype=object))
 
-    def _gather_index_chain(self, expr: Expression) -> Tuple[Expression, List[Expression]]:
+    def _gather_index_chain(self, expr: Expression) -> Tuple[Expression, List[Expression], List[bool]]:
         # Avoid repeated list concatenations for deep chains like a[1][2][3].
         parts: List[List[Expression]] = []
+        parts_is_map: List[bool] = []
         current: Expression = expr
         while type(current) is IndexExpression:
             parts.append(current.indices)
+            # Each IndexExpression now records whether it used angle-brackets
+            # (map-style) or square-brackets (tensor-style).
+            parts_is_map.append(current.is_map)  # type: ignore[attr-defined]
             current = current.base
         if not parts:
-            return current, []
+            return current, [], []
         # Indices are encountered from outermost suffix inward; reverse to
         # preserve evaluation order.
         out: List[Expression] = []
-        for chunk in reversed(parts):
+        out_flags: List[bool] = []
+        for chunk, is_map in zip(reversed(parts), reversed(parts_is_map)):
             out.extend(chunk)
-        return current, out
+            # Each chunk contributes one flag repeated for each index in the chunk
+            out_flags.extend([is_map] * len(chunk))
+        return current, out, out_flags
+
+    def _index_tensor(self, base_val: Value, index_nodes: List[Expression], env: Environment, location: SourceLocation) -> Value:
+        """Index into a tensor value with tensor-style indices."""
+        assert base_val.type == TYPE_TNS
+        assert isinstance(base_val.value, Tensor)
+        eval_expr = self._evaluate_expression
+        expect_int = self._expect_int
+        # Determine if any index is a range (slice) or star. If none,
+        # behave as before and return a single element. If any ranges
+        # or stars present, construct numpy slicing indices and return
+        # a Tensor.
+        RangeT = Range
+        StarT = Star
+        has_range = any((type(n) is RangeT) or (type(n) is StarT) for n in index_nodes)
+        if not has_range:
+            indices: List[int] = []
+            indices_append = indices.append
+            for idx_node in index_nodes:
+                indices_append(expect_int(eval_expr(idx_node, env), "INDEX", location))
+            offset = self._tensor_flat_index(base_val.value, indices, "INDEX", location)
+            return base_val.value.data[offset]
+
+        # Build numpy indexers (mix of ints and slices). Resolve 1-based
+        # indices into 0-based python indices; ranges are inclusive.
+        arr = base_val.value.data.reshape(tuple(base_val.value.shape))
+        indexers: List[object] = []
+        for dim, node in enumerate(index_nodes):
+            node_type = type(node)
+            if node_type is Range:
+                lo_val = expect_int(eval_expr(node.lo, env), "INDEX", location)
+                hi_val = expect_int(eval_expr(node.hi, env), "INDEX", location)
+                # validate both endpoints
+                lo_res = self._resolve_tensor_index(lo_val, base_val.value.shape[dim], "INDEX", location)
+                hi_res = self._resolve_tensor_index(hi_val, base_val.value.shape[dim], "INDEX", location)
+                # convert to 0-based slice: start = lo_res-1, stop = hi_res (exclusive)
+                indexers.append(slice(lo_res - 1, hi_res))
+            elif node_type is Star:
+                # Full-dimension slice `*` selects the entire axis
+                indexers.append(slice(None, None))
+            else:
+                raw = expect_int(eval_expr(node, env), "INDEX", location)
+                idx_res = self._resolve_tensor_index(raw, base_val.value.shape[dim], "INDEX", location)
+                indexers.append(idx_res - 1)
+
+        sel = arr[tuple(indexers)]
+        sel_arr = sel if isinstance(sel, np.ndarray) else np.array(sel, dtype=object)
+        # Ensure sel_arr is at least 1-D (slices guarantee at least one dim)
+        if sel_arr.ndim == 0:
+            # Single element selected despite slice usage; wrap as 1-element tensor
+            sel_arr = sel_arr.reshape((1,))
+        out_shape = list(sel_arr.shape)
+        out_data = sel_arr.ravel()
+        return Value(TYPE_TNS, Tensor(shape=out_shape, data=out_data))
+
+    def _index_map(self, base_val: Value, index_nodes: List[Expression], env: Environment, location: SourceLocation) -> Value:
+        """Index into a map value with map-style indices."""
+        assert base_val.type == TYPE_MAP
+        assert isinstance(base_val.value, Map)
+        eval_expr = self._evaluate_expression
+        current = base_val
+        for idx, node in enumerate(index_nodes):
+            key_val = eval_expr(node, env)
+            key_val = self._deref_value(key_val, location=location, rule="INDEX")
+            if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="INDEX")
+            key = (key_val.type, key_val.value)
+            if not isinstance(current.value, Map):
+                raise ASMRuntimeError("Attempted map-indexing into non-map value", location=location, rewrite_rule="INDEX")
+            if key not in current.value.data:
+                raise ASMRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="INDEX")
+            current = current.value.data[key]
+            if idx + 1 < len(index_nodes):
+                current = self._deref_value(current, location=location, rule="INDEX")
+        return current
 
     def _evaluate_expression(self, expression: Expression, env: Environment) -> Value:
         expression_type = type(expression)
@@ -5353,7 +5460,43 @@ class Interpreter:
         if expression_type is PointerExpression:
             return self._make_pointer_value(expression.target, env, expression.location)
         if expression_type is IndexExpression:
-            base_expr, index_nodes = self._gather_index_chain(expression)
+            base_expr, index_nodes, index_flags = self._gather_index_chain(expression)
+            base_val = self._evaluate_expression(base_expr, env)
+            base_val = self._deref_value(base_val, location=expression.location, rule="INDEX")
+            
+            # Support mixed indexing: process tensor indices first, then map indices.
+            # Split indices into tensor-style (False in index_flags) and map-style (True).
+            current_val = base_val
+            
+            # Group consecutive indices of the same type
+            i = 0
+            while i < len(index_nodes):
+                is_map = index_flags[i]
+                # Find the end of this group (consecutive indices of the same type)
+                j = i
+                while j < len(index_flags) and index_flags[j] == is_map:
+                    j += 1
+                
+                group_nodes = index_nodes[i:j]
+                
+                if not is_map:
+                    # Process tensor-style indices
+                    if current_val.type != TYPE_TNS:
+                        raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=expression.location, rewrite_rule="INDEX")
+                    current_val = self._index_tensor(current_val, group_nodes, env, expression.location)
+                else:
+                    # Process map-style indices
+                    if current_val.type != TYPE_MAP:
+                        raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=expression.location, rewrite_rule="INDEX")
+                    current_val = self._index_map(current_val, group_nodes, env, expression.location)
+                
+                i = j
+            
+            return current_val
+            
+        # Legacy code paths kept for reference but should not be reached
+        if False and expression_type is IndexExpression:
+            base_expr, index_nodes, index_flags = self._gather_index_chain(expression)
             base_val = self._evaluate_expression(base_expr, env)
             base_val = self._deref_value(base_val, location=expression.location, rule="INDEX")
             # Tensor indexing path (existing semantics)

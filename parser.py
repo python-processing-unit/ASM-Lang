@@ -180,6 +180,9 @@ class AsyncExpression(Expression):
 class IndexExpression(Expression):
     base: Expression
     indices: List[Expression]
+    # True when the indices were written with angle-brackets `<...>` (map-style),
+    # False when written with square brackets `[...]` (tensor-style).
+    is_map: bool
 
 
 @dataclass(slots=True)
@@ -615,7 +618,8 @@ class Parser:
                 if not self._match("COMMA"):
                     break
         self._consume(closing)
-        return IndexExpression(location=self._location_from_token(lbracket), base=base, indices=indices)
+        is_map = start_tok.type == "LANGLE"
+        return IndexExpression(location=self._location_from_token(lbracket), base=base, indices=indices, is_map=is_map)
 
     def _parse_index_expression(self) -> IndexExpression:
         expr = self._parse_primary()
@@ -710,9 +714,11 @@ class Parser:
         if depth != 0:
             return False
 
-        # Support additional bracketed suffixes like a[1][2].
-        while i < len(tokens) and tokens[i].type == "LBRACKET":
-            depth = 0
+        # Support additional bracketed or angled suffixes like a[1][2] or a[1]<"k">.
+        while i < len(tokens) and tokens[i].type in ("LBRACKET", "LANGLE"):
+            # We advance past the opening bracket/angle and treat that as
+            # one level of depth already; initialize depth=1 accordingly.
+            depth = 1
             i += 1
             while i < len(tokens):
                 tok = tokens[i]

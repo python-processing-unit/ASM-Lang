@@ -94,7 +94,7 @@ FUNC VALUE(STR: num, INT: base):INT{
         IF(NOT(KEYIN(digit, digits))){
             THROW(JOIN("Digit \"", digit, "\" not valid for base ", STR(base)))
         }
-        ADD(@value, MUL(digits[digit], POW(base, idx)))
+        ADD(@value, MUL(digits<digit>, POW(base, idx)))
         # compute internal binary value as digit*base^(position from right)
     }
     DEL(digit)
@@ -157,7 +157,7 @@ FUNC CONVERT(STR: num, INT: from, INT: to):STR{
     }
     WHILE(GT(int_value, 0)){
         INT: rem = MOD(int_value, to)
-        STR: remstr = rev[rem]
+        STR: remstr = rev<rem>
         int_result = JOIN(remstr, int_result)
         DIV(@int_value, to)
         DEL(remstr)
@@ -188,7 +188,7 @@ FUNC CONVERT(STR: num, INT: from, INT: to):STR{
         ADD(@iter, 1)
         MUL(@frac_num, to)
         INT: d = DIV(frac_num, denom)
-        STR: dstr = rev[d]
+        STR: dstr = rev<d>
         frac_res = JOIN(frac_res, dstr)
         INT: new_num = MOD(frac_num, denom)
         frac_num = new_num

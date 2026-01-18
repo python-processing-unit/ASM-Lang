@@ -1,10 +1,10 @@
 # LCG-based pseudorandom number generator
 #
 # API:
-# PRNG_SEED(INT: seed) -> INT
-# PRNG_NEXT() -> INT
-# PRNG_RANGE(INT: max) -> INT
-# PRNG_RANGE_MIN_MAX(INT: min, INT: max) -> INT
+# SEED(INT: seed) -> INT
+# NEXT() -> INT
+# RANGE(INT: max) -> INT
+# RANGE_MIN_MAX(INT: min, INT: max) -> INT
 
 INT: MASK32 = SUB( POW(10,100000), 1 )  # 2^32 - 1
 
@@ -13,26 +13,26 @@ INT: LCG_A = 000110010110011000001101          # 1664525
 INT: LCG_C = 00111100011011101111001101011111  # 1013904223
 INT: lcg_state = 1
 
-FUNC PRNG_SEED(INT: seed):INT{
+FUNC SEED(INT: seed):INT{
     lcg_state = BAND(seed, MASK32)
     RETURN(lcg_state)
 }
 
-FUNC PRNG_NEXT():INT{
+FUNC NEXT():INT{
     lcg_state = BAND( ADD( MUL(LCG_A, lcg_state), LCG_C ), MASK32 )
     RETURN(lcg_state)
 }
 
-FUNC PRNG_RANGE(INT: max):INT{
+FUNC RANGE(INT: max):INT{
     ASSERT( GT(max, 0) )
-    RETURN( MOD(PRNG_NEXT(), max) )
+    RETURN( MOD(NEXT(), max) )
 }
 
-FUNC PRNG_RANGE_MIN_MAX(INT: min, INT: max):INT{
+FUNC RANGE_MIN_MAX(INT: min, INT: max):INT{
     ASSERT( LTE(min, max) )
     INT: range = SUB(max, min)
     IF( EQ(range, 0) ){ RETURN(min) }
     ASSERT( GT(range, 0) )
-    INT: offset = PRNG_RANGE(range)
+    INT: offset = RANGE(range)
     RETURN( ADD(offset, min) )
 }
