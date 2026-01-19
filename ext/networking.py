@@ -59,19 +59,19 @@ def _expect_str(v: Any, rule: str, location: Any) -> str:
     return str(v.value)
 
 
-def _make_int(n: int):
+def _make_int(n: int) -> Any:
     from interpreter import TYPE_INT, Value
 
     return Value(TYPE_INT, int(n))
 
 
-def _make_str(s: str):
+def _make_str(s: str) -> Any:
     from interpreter import TYPE_STR, Value
 
     return Value(TYPE_STR, str(s))
 
 
-def _bytes_to_tns(data: bytes):
+def _bytes_to_tns(data: bytes) -> Any:
     from interpreter import TYPE_INT, TYPE_TNS, Tensor, Value
 
     # Keep shape at least 1 to match existing BYTES behavior.
@@ -164,8 +164,7 @@ def _ssl_context(*, verify: bool) -> ssl.SSLContext:
 
 # ---- TCP ----
 
-
-def _tcp_connect(interpreter, args, _arg_nodes, _env, location):
+def _tcp_connect(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "TCP_CONNECT", location)
@@ -199,7 +198,7 @@ def _tcp_connect(interpreter, args, _arg_nodes, _env, location):
     return _make_int(hid)
 
 
-def _tcp_send(interpreter, args, _arg_nodes, _env, location):
+def _tcp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "TCP_SEND", location)
@@ -217,7 +216,7 @@ def _tcp_send(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"TCP_SEND failed: {exc}", location=location, rewrite_rule="TCP_SEND")
 
 
-def _tcp_recv_text(interpreter, args, _arg_nodes, _env, location):
+def _tcp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "TCP_RECV_TEXT", location)
@@ -237,7 +236,7 @@ def _tcp_recv_text(interpreter, args, _arg_nodes, _env, location):
     return _make_str(data.decode(enc, errors="replace"))
 
 
-def _tcp_recv_bytes(interpreter, args, _arg_nodes, _env, location):
+def _tcp_recv_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "TCP_RECV_BYTES", location)
@@ -255,7 +254,7 @@ def _tcp_recv_bytes(interpreter, args, _arg_nodes, _env, location):
     return _bytes_to_tns(data)
 
 
-def _tcp_close(interpreter, args, _arg_nodes, _env, location):
+def _tcp_close(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "TCP_CLOSE", location)
@@ -273,7 +272,7 @@ def _tcp_close(interpreter, args, _arg_nodes, _env, location):
 # ---- UDP ----
 
 
-def _udp_bind(interpreter, args, _arg_nodes, _env, location):
+def _udp_bind(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "UDP_BIND", location)
@@ -299,7 +298,7 @@ def _udp_bind(interpreter, args, _arg_nodes, _env, location):
     return _make_int(hid)
 
 
-def _udp_send(interpreter, args, _arg_nodes, _env, location):
+def _udp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "UDP_SEND", location)
@@ -321,7 +320,7 @@ def _udp_send(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"UDP_SEND failed: {exc}", location=location, rewrite_rule="UDP_SEND")
 
 
-def _udp_recv_text(interpreter, args, _arg_nodes, _env, location):
+def _udp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "UDP_RECV_TEXT", location)
@@ -346,7 +345,7 @@ def _udp_recv_text(interpreter, args, _arg_nodes, _env, location):
     return _make_str(data.decode(enc, errors="replace"))
 
 
-def _udp_recv_bytes(interpreter, args, _arg_nodes, _env, location):
+def _udp_recv_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "UDP_RECV_BYTES", location)
@@ -369,7 +368,7 @@ def _udp_recv_bytes(interpreter, args, _arg_nodes, _env, location):
     return _bytes_to_tns(data)
 
 
-def _udp_close(interpreter, args, _arg_nodes, _env, location):
+def _udp_close(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     hid = _expect_int(args[0], "UDP_CLOSE", location)
@@ -401,7 +400,7 @@ def _http_request_bytes(method: str, url: str, *, body: Optional[bytes], content
         return int(status), data
 
 
-def _http_get_text(interpreter, args, _arg_nodes, _env, location):
+def _http_get_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_TEXT", location)
@@ -416,7 +415,7 @@ def _http_get_text(interpreter, args, _arg_nodes, _env, location):
     return _make_str(data.decode("utf-8", errors="replace"))
 
 
-def _http_get_bytes(interpreter, args, _arg_nodes, _env, location):
+def _http_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_BYTES", location)
@@ -431,7 +430,7 @@ def _http_get_bytes(interpreter, args, _arg_nodes, _env, location):
     return _bytes_to_tns(data)
 
 
-def _http_get_status(interpreter, args, _arg_nodes, _env, location):
+def _http_get_status(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_STATUS", location)
@@ -446,7 +445,7 @@ def _http_get_status(interpreter, args, _arg_nodes, _env, location):
     return _make_int(status)
 
 
-def _http_post_text(interpreter, args, _arg_nodes, _env, location):
+def _http_post_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     url = _expect_str(args[0], "HTTP_POST_TEXT", location)
@@ -473,13 +472,13 @@ def _http_post_text(interpreter, args, _arg_nodes, _env, location):
 # ---- FTP / FTPS ----
 
 
-def _ftp_login(host: str, port: int, user: str, password: str, *, tls: bool, timeout_s: Optional[float], verify: bool):
+def _ftp_login(host: str, port: int, user: str, password: str, *, tls: bool, timeout_s: Optional[float], verify: bool) -> Any:
     import ftplib
 
     if tls:
         ftps = ftplib.FTP_TLS()
         ftps.context = ssl.create_default_context() if verify else _ssl_context(verify=False)
-        ftps.connect(host=host, port=port, timeout=timeout_s)
+        ftps.connect(host=host, port=port, timeout=(float(timeout_s) if timeout_s is not None else 0.0))
         if user or password:
             ftps.login(user=user, passwd=password)
         else:
@@ -488,7 +487,7 @@ def _ftp_login(host: str, port: int, user: str, password: str, *, tls: bool, tim
         return ftps
 
     ftp = ftplib.FTP()
-    ftp.connect(host=host, port=port, timeout=timeout_s)
+    ftp.connect(host=host, port=port, timeout=(float(timeout_s) if timeout_s is not None else 0.0))
     if user or password:
         ftp.login(user=user, passwd=password)
     else:
@@ -496,7 +495,7 @@ def _ftp_login(host: str, port: int, user: str, password: str, *, tls: bool, tim
     return ftp
 
 
-def _ftp_list(interpreter, args, _arg_nodes, _env, location):
+def _ftp_list(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "FTP_LIST", location)
@@ -528,7 +527,7 @@ def _ftp_list(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"FTP_LIST failed: {exc}", location=location, rewrite_rule="FTP_LIST")
 
 
-def _ftp_get_bytes(interpreter, args, _arg_nodes, _env, location):
+def _ftp_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "FTP_GET_BYTES", location)
@@ -560,7 +559,7 @@ def _ftp_get_bytes(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"FTP_GET_BYTES failed: {exc}", location=location, rewrite_rule="FTP_GET_BYTES")
 
 
-def _ftp_put_bytes(interpreter, args, _arg_nodes, _env, location):
+def _ftp_put_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "FTP_PUT_BYTES", location)
@@ -596,7 +595,7 @@ def _ftp_put_bytes(interpreter, args, _arg_nodes, _env, location):
 # ---- SMTP / SMTPS ----
 
 
-def _smtp_send(interpreter, args, _arg_nodes, _env, location):
+def _smtp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
     from interpreter import ASMRuntimeError
 
     host = _expect_str(args[0], "SMTP_SEND", location)
@@ -635,11 +634,13 @@ def _smtp_send(interpreter, args, _arg_nodes, _env, location):
     try:
         import smtplib
 
+        timeout_val: float = float(timeout_s) if timeout_s is not None else 0.0
+        client: Any
         if tls != 0:
             ctx = _ssl_context(verify=verify != 0)
-            client = smtplib.SMTP_SSL(host=host, port=port, timeout=timeout_s, context=ctx)
+            client = smtplib.SMTP_SSL(host=host, port=port, timeout=timeout_val, context=ctx)
         else:
-            client = smtplib.SMTP(host=host, port=port, timeout=timeout_s)
+            client = smtplib.SMTP(host=host, port=port, timeout=timeout_val)
 
         try:
             client.ehlo()

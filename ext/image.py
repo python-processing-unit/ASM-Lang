@@ -10,16 +10,26 @@ GDI+ is present.
 from __future__ import annotations
 
 import atexit
+from _ctypes import Array
+from ctypes import c_bool
+from ctypes import c_int, c_uint, c_void_p
+from ctypes import WinDLL
+from ctypes import c_ubyte, c_uint16, c_uint32
+from ctypes import WinDLL
+from ctypes import c_long, c_ulong, c_ushort
+from concurrent.futures._base import Future
 import math
 import os
 import struct
 import sys
 import zlib
-from concurrent.futures import ThreadPoolExecutor
-from typing import Any, List, Tuple, Optional
+from concurrent.futures import Future, ThreadPoolExecutor
+from typing import Any, Generator, List, Tuple, Optional
 
+Image = Any
 import numpy as np
 
+from interpreter import Value, Tensor
 from extensions import ASMExtensionError, ExtensionAPI
 
 
@@ -55,23 +65,23 @@ def _guard_image_size(width: int, height: int, rule: str, location: Any) -> None
         raise ASMRuntimeError(f"{rule}: image too large", location=location, rewrite_rule=rule)
 
 
-def _make_tensor_from_pixels(width: int, height: int, pixels: List[int], rule: str, location: Any):
+def _make_tensor_from_pixels(width: int, height: int, pixels: List[int], rule: str, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
-    expected = width * height * 4
+    expected: int = width * height * 4
     if len(pixels) != expected:
         raise ASMRuntimeError(f"{rule}: pixel buffer has unexpected length", location=location, rewrite_rule=rule)
     # micro-optim: cache local refs for faster construction
     _Val = Value
-    _TINT = TYPE_INT
+    _TINT: str = TYPE_INT
     # Build object array of channel values
-    data = np.array([_Val(_TINT, int(ch)) for ch in pixels], dtype=object)
+    data: np.ndarray = np.array([_Val(_TINT, int(ch)) for ch in pixels], dtype=object)
     # Interpreter image tensors use layout [width, height, channel]
     # The decoder produces pixels in row-major order (y outer, x inner):
     # reshape to (height, width, 4) then transpose to (width, height, 4).
-    arr = data.reshape((int(height), int(width), 4)).transpose((1, 0, 2)).copy()
-    flat = np.array(arr.flatten(), dtype=object)
-    shape = [int(width), int(height), 4]  # [column][row][channel]
+    arr: np.ndarray = data.reshape((int(height), int(width), 4)).transpose((1, 0, 2)).copy()
+    flat: np.ndarray = np.array(arr.flatten(), dtype=object)
+    shape: List[int] = [int(width), int(height), 4]  # [column][row][channel]
     return Value(TYPE_TNS, Tensor(shape=shape, data=flat))
 
 
@@ -103,13 +113,13 @@ def _alpha_blend_pixel(
     d_a = _expect_int(dest_arr[x, y, 3], rule, location)
 
     r, g, b, a = color
-    sa = _clamp_channel(a)
-    inv_sa = 255 - sa
+    sa: int = _clamp_channel(a)
+    inv_sa: int = 255 - sa
 
-    out_r = _clamp_channel((sa * r + inv_sa * d_r) // 255)
-    out_g = _clamp_channel((sa * g + inv_sa * d_g) // 255)
-    out_b = _clamp_channel((sa * b + inv_sa * d_b) // 255)
-    out_a = _clamp_channel(sa + (d_a * inv_sa) // 255)
+    out_r: int = _clamp_channel((sa * r + inv_sa * d_r) // 255)
+    out_g: int = _clamp_channel((sa * g + inv_sa * d_g) // 255)
+    out_b: int = _clamp_channel((sa * b + inv_sa * d_b) // 255)
+    out_a: int = _clamp_channel(sa + (d_a * inv_sa) // 255)
 
     dest_arr[x, y, 0] = _Val(TYPE_INT, int(out_r))
     dest_arr[x, y, 1] = _Val(TYPE_INT, int(out_g))
@@ -117,24 +127,24 @@ def _alpha_blend_pixel(
     dest_arr[x, y, 3] = _Val(TYPE_INT, int(out_a))
 
 
-def _tensor_to_int_image(img, rule: str, interpreter, location) -> np.ndarray:
+def _tensor_to_int_image(img: Tensor, rule: str, interpreter: Any, location: Any) -> np.ndarray:
     """Return an int64 view of an image tensor after type validation."""
     interpreter.builtins._ensure_tensor_ints(img, rule, location)
     shape = tuple(img.shape)
     total = int(np.prod(shape))
     arr_view = img.data.reshape(shape)
-    flat_iter = (int(v.value) for v in arr_view.flatten())
-    ints = np.fromiter(flat_iter, dtype=np.int64, count=total)
+    flat_iter: Generator[int, None, None] = (int(v.value) for v in arr_view.flatten())
+    ints: np.ndarray = np.fromiter(flat_iter, dtype=np.int64, count=total)
     return ints.reshape(shape)
 
 
-def _value_tensor_from_ints(int_arr: np.ndarray):
+def _value_tensor_from_ints(int_arr: np.ndarray) -> Value:
     from interpreter import TYPE_INT, TYPE_TNS, Tensor, Value
 
     ints = np.asarray(int_arr)
-    flat_objs = [Value(TYPE_INT, int(v)) for v in ints.flatten()]
-    data = np.array(flat_objs, dtype=object)
-    shape = [int(ints.shape[0]), int(ints.shape[1]), int(ints.shape[2])]
+    flat_objs: List[Value] = [Value(TYPE_INT, int(v)) for v in ints.flatten()]
+    data: np.ndarray = np.array(flat_objs, dtype=object)
+    shape: List[int] = [int(ints.shape[0]), int(ints.shape[1]), int(ints.shape[2])]
     return Value(TYPE_TNS, Tensor(shape=shape, data=data))
 
 
@@ -167,10 +177,10 @@ def _resize_image_int(img_int: np.ndarray, target_w: int, target_h: int, *, anti
         wx0g = 1.0 - wxg
         wy0g = 1.0 - wyg
 
-        v00 = src[x0g, y0g]
-        v10 = src[x1g, y0g]
-        v01 = src[x0g, y1g]
-        v11 = src[x1g, y1g]
+        v00: np.ndarray = src[x0g, y0g]
+        v10: np.ndarray = src[x1g, y0g]
+        v01: np.ndarray = src[x0g, y1g]
+        v11: np.ndarray = src[x1g, y1g]
 
         out = (
             v00 * (wy0g[..., None] * wx0g[..., None])
@@ -224,7 +234,7 @@ if sys.platform == "win32":
         global _gdiplus_ready, _gdiplus_handle
         if _gdiplus_ready and _gdiplus_handle is not None:
             return _gdiplus_handle
-        gdiplus = ctypes.windll.gdiplus
+        gdiplus: WinDLL = ctypes.windll.gdiplus
         startup = _GdiplusStartupInput(1, None, False, False)
         status = gdiplus.GdiplusStartup(ctypes.byref(_gdiplus_token), ctypes.byref(startup), None)
         if status != 0:
@@ -273,15 +283,18 @@ if sys.platform == "win32":
 
             try:
                 stride = int(data.Stride)
-                abs_stride = abs(stride)
+                abs_stride: int = abs(stride)
                 buf_len = abs_stride * rect.Height
-                buf = (ctypes.c_ubyte * buf_len).from_address(int(data.Scan0))
+                if not data.Scan0:
+                    raise RuntimeError("GdipBitmapLockBits returned null Scan0")
+                scan0_addr: int = int(data.Scan0)
+                buf = (ctypes.c_ubyte * buf_len).from_address(scan0_addr)
                 pixels: List[int] = []
                 for y in range(rect.Height):
-                    row_index = y if stride >= 0 else (rect.Height - 1 - y)
-                    base = row_index * abs_stride
+                    row_index: int | Any = y if stride >= 0 else (rect.Height - 1 - y)
+                    base: int | Any = row_index * abs_stride
                     for x in range(rect.Width):
-                        idx = base + x * 4
+                        idx: int | Any = base + x * 4
                         b = buf[idx]
                         g = buf[idx + 1]
                         r = buf[idx + 2]
@@ -299,10 +312,10 @@ else:
 # ---- Pure-Python decoders ----
 
 def _paeth(a: int, b: int, c: int) -> int:
-    p = a + b - c
-    pa = abs(p - a)
-    pb = abs(p - b)
-    pc = abs(p - c)
+    p: int = a + b - c
+    pa: int = abs(p - a)
+    pb: int = abs(p - b)
+    pc: int = abs(p - c)
     if pa <= pb and pa <= pc:
         return a
     if pb <= pc:
@@ -312,7 +325,7 @@ def _paeth(a: int, b: int, c: int) -> int:
 
 def _decode_png(path: str) -> Tuple[int, int, List[int]]:
     with open(path, "rb") as handle:
-        data = handle.read()
+        data: bytes = handle.read()
 
     if not data.startswith(b"\x89PNG\r\n\x1a\n"):
         raise RuntimeError("Not a PNG file")
@@ -326,9 +339,9 @@ def _decode_png(path: str) -> Tuple[int, int, List[int]]:
 
     while pos + 8 <= len(data):
         length = struct.unpack("!I", data[pos : pos + 4])[0]
-        ctype = data[pos + 4 : pos + 8]
+        ctype: bytes = data[pos + 4 : pos + 8]
         pos += 8
-        chunk = data[pos : pos + length]
+        chunk: bytes = data[pos : pos + length]
         pos += length + 4  # skip CRC
 
         if ctype == b"IHDR":
@@ -351,9 +364,9 @@ def _decode_png(path: str) -> Tuple[int, int, List[int]]:
     if color_type not in (2, 6):
         raise RuntimeError("Unsupported PNG color type")
 
-    bpp = 4 if color_type == 6 else 3
+    bpp: int = 4 if color_type == 6 else 3
     stride = width * bpp
-    raw = zlib.decompress(bytes(idat))
+    raw: bytes = zlib.decompress(bytes(idat))
     expected = (stride + 1) * height
     if len(raw) < expected:
         raise RuntimeError("PNG data truncated")
@@ -362,16 +375,16 @@ def _decode_png(path: str) -> Tuple[int, int, List[int]]:
     prev = bytearray(stride)
     idx = 0
     for _ in range(height):
-        ftype = raw[idx]
+        ftype: int = raw[idx]
         idx += 1
         row = bytearray(raw[idx : idx + stride])
         idx += stride
 
         recon = bytearray(stride)
         for i in range(stride):
-            left = recon[i - bpp] if i >= bpp else 0
-            up = prev[i] if prev else 0
-            up_left = prev[i - bpp] if i >= bpp else 0
+            left: int = recon[i - bpp] if i >= bpp else 0
+            up: int = prev[i] if prev else 0
+            up_left: int = prev[i - bpp] if i >= bpp else 0
             if ftype == 0:
                 val = row[i]
             elif ftype == 1:
@@ -388,11 +401,11 @@ def _decode_png(path: str) -> Tuple[int, int, List[int]]:
 
         prev = recon
         for x in range(width):
-            off = x * bpp
-            r = recon[off]
-            g = recon[off + 1]
-            b = recon[off + 2]
-            a = recon[off + 3] if bpp == 4 else 255
+            off: int = x * bpp
+            r: int = recon[off]
+            g: int = recon[off + 1]
+            b: int = recon[off + 2]
+            a: int = recon[off + 3] if bpp == 4 else 255
             pixels.extend((int(r), int(g), int(b), int(a)))
 
     return width, height, pixels
@@ -400,7 +413,7 @@ def _decode_png(path: str) -> Tuple[int, int, List[int]]:
 
 def _decode_bmp(path: str) -> Tuple[int, int, List[int]]:
     with open(path, "rb") as handle:
-        data = handle.read()
+        data: bytes = handle.read()
 
     if len(data) < 54 or data[:2] != b"BM":
         raise RuntimeError("Not a BMP file")
@@ -429,7 +442,7 @@ def _decode_bmp(path: str) -> Tuple[int, int, List[int]]:
     row_stride = ((bpp * w + 31) // 32) * 4
     pixels: List[int] = []
     for row in range(h):
-        src_row = row if top_down else (h - 1 - row)
+        src_row: int | Any = row if top_down else (h - 1 - row)
         base = pixel_offset + src_row * row_stride
         for col in range(w):
             off = base + col * (bpp // 8)
@@ -472,10 +485,10 @@ def _load_bmp_file(path: str) -> Tuple[int, int, List[int]]:
 
 # ---- Operators ----
 
-def _op_load_png(interpreter, args, _arg_nodes, _env, location):
+def _op_load_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError
 
-    path = _expect_str(args[0], "LOAD_PNG", location)
+    path: str = _expect_str(args[0], "LOAD_PNG", location)
     _check_path(path, "LOAD_PNG", location)
     try:
         w, h, pixels = _load_png_file(path)
@@ -487,10 +500,10 @@ def _op_load_png(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"LOAD_PNG failed: {exc}", location=location, rewrite_rule="LOAD_PNG")
 
 
-def _op_load_jpeg(interpreter, args, _arg_nodes, _env, location):
+def _op_load_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError
 
-    path = _expect_str(args[0], "LOAD_JPEG", location)
+    path: str = _expect_str(args[0], "LOAD_JPEG", location)
     _check_path(path, "LOAD_JPEG", location)
     try:
         w, h, pixels = _load_jpeg_file(path)
@@ -502,10 +515,10 @@ def _op_load_jpeg(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"LOAD_JPEG failed: {exc}", location=location, rewrite_rule="LOAD_JPEG")
 
 
-def _op_load_bmp(interpreter, args, _arg_nodes, _env, location):
+def _op_load_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError
 
-    path = _expect_str(args[0], "LOAD_BMP", location)
+    path: str = _expect_str(args[0], "LOAD_BMP", location)
     _check_path(path, "LOAD_BMP", location)
     try:
         w, h, pixels = _load_bmp_file(path)
@@ -517,7 +530,7 @@ def _op_load_bmp(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError(f"LOAD_BMP failed: {exc}", location=location, rewrite_rule="LOAD_BMP")
 
 
-def _op_blit(interpreter, args, _arg_nodes, _env, location):
+def _op_blit(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, dest, x, y, mixalpha=1
@@ -545,14 +558,14 @@ def _op_blit(interpreter, args, _arg_nodes, _env, location):
     # Quick bounds check for early return (no overlap)
     if x0 >= w_dst or y0 >= h_dst or x0 + w_src <= 0 or y0 + h_src <= 0:
         # return a copy of dest
-        new_data = np.array(dest.data.flat, dtype=object)
+        new_data: np.ndarray = np.array(dest.data.flat, dtype=object)
         return Value(TYPE_TNS, Tensor(shape=list(dest.shape), data=new_data))
 
     # Compute overlapping region
-    src_x0 = max(0, -x0)
-    src_y0 = max(0, -y0)
-    dst_x0 = max(0, x0)
-    dst_y0 = max(0, y0)
+    src_x0: int = max(0, -x0)
+    src_y0: int = max(0, -y0)
+    dst_x0: int = max(0, x0)
+    dst_y0: int = max(0, y0)
     over_w = min(w_src - src_x0, w_dst - dst_x0)
     over_h = min(h_src - src_y0, h_dst - dst_y0)
     if over_w <= 0 or over_h <= 0:
@@ -568,9 +581,9 @@ def _op_blit(interpreter, args, _arg_nodes, _env, location):
     dst_slice = out[dst_x0 : dst_x0 + over_w, dst_y0 : dst_y0 + over_h, :]
 
     if mixalpha:
-        sa = np.clip(src_slice[..., 3], 0, 255).astype(np.int64)
-        inv_sa = 255 - sa
-        out_rgb = (sa[..., None] * src_slice[..., :3] + inv_sa[..., None] * dst_slice[..., :3]) // 255
+        sa: np.ndarray = np.clip(src_slice[..., 3], 0, 255).astype(np.int64)
+        inv_sa: np.ndarray = 255 - sa
+        out_rgb: np.ndarray = (sa[..., None] * src_slice[..., :3] + inv_sa[..., None] * dst_slice[..., :3]) // 255
         out_a = sa + (dst_slice[..., 3] * inv_sa) // 255
         dst_slice[..., :3] = out_rgb
         dst_slice[..., 3] = out_a
@@ -584,7 +597,7 @@ def _op_blit(interpreter, args, _arg_nodes, _env, location):
     return _value_tensor_from_ints(out)
 
 
-def _op_scale(interpreter, args, _arg_nodes, _env, location):
+def _op_scale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, scale_x (width), scale_y (height), antialiasing=1
@@ -623,7 +636,7 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError("SCALE target dimensions must be positive", location=location, rewrite_rule="SCALE")
     # Fast path: identical size -> return a copy
     if src_h == target_h and src_w == target_w:
-        flat = np.array(src.data.flat, dtype=object)
+        flat: np.ndarray = np.array(src.data.flat, dtype=object)
         return Value(TYPE_TNS, Tensor(shape=list(src.shape), data=flat))
 
     src_int = _tensor_to_int_image(src, "SCALE", interpreter, location)
@@ -631,7 +644,7 @@ def _op_scale(interpreter, args, _arg_nodes, _env, location):
     return _value_tensor_from_ints(out_int)
 
 
-def _op_resize(interpreter, args, _arg_nodes, _env, location):
+def _op_resize(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, new_width, new_height, antialiasing=1 (antialiasing optional)
@@ -652,7 +665,7 @@ def _op_resize(interpreter, args, _arg_nodes, _env, location):
         raise ASMRuntimeError("RESIZE target dimensions must be positive", location=location, rewrite_rule="RESIZE")
     # Fast path: identical size -> return a copy
     if src_h == target_h and src_w == target_w:
-        flat = np.array(src.data.flat, dtype=object)
+        flat: np.ndarray = np.array(src.data.flat, dtype=object)
         return Value(TYPE_TNS, Tensor(shape=list(src.shape), data=flat))
 
     src_int = _tensor_to_int_image(src, "RESIZE", interpreter, location)
@@ -660,7 +673,7 @@ def _op_resize(interpreter, args, _arg_nodes, _env, location):
     return _value_tensor_from_ints(out_int)
 
 
-def _op_rotate(interpreter, args, _arg_nodes, _env, location):
+def _op_rotate(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
@@ -683,23 +696,23 @@ def _op_rotate(interpreter, args, _arg_nodes, _env, location):
     except Exception:
         ang = degrees
     # Normalize to [0,360)
-    norm = float(ang) % 360.0
+    norm: float = float(ang) % 360.0
     import math
     if math.isclose(norm, 90.0, abs_tol=1e-9) or math.isclose(norm, 270.0, abs_tol=1e-9):
         # k=1 rotates 90° CCW, k=3 rotates 270° CCW (i.e. -90°)
-        k = 1 if math.isclose(norm, 90.0, abs_tol=1e-9) else 3
+        k: int = 1 if math.isclose(norm, 90.0, abs_tol=1e-9) else 3
         # arr has shape (w, h, 4) where axes (0,1) are X,Y; rot90 on (0,1)
         # produces shape (h, w, 4) as required for a 90° rotation.
         res = np.rot90(arr, k=k, axes=(0, 1)).copy()
-        flat = np.array(res.flatten(), dtype=object)
+        res_flat: np.ndarray = np.array(res.flatten(), dtype=object)
         new_w, new_h = int(res.shape[0]), int(res.shape[1])
-        return Value(TYPE_TNS, Tensor(shape=[new_w, new_h, 4], data=flat))
+        return Value(TYPE_TNS, Tensor(shape=[new_w, new_h, 4], data=res_flat))
 
     # Try Pillow for robust, fast rotation. Fallback to a numpy implementation.
     try:
-        from PIL import Image
+        from PIL import Image as _PILImage
 
-        flat = bytearray()
+        pillow_bytes = bytearray()
         _expect_int = interpreter._expect_int
         # arr is [x,y,c] — iterate y then x to produce row-major bytes for Pillow
         for y in range(h):
@@ -708,44 +721,51 @@ def _op_rotate(interpreter, args, _arg_nodes, _env, location):
                 g = _expect_int(arr[x, y, 1], "ROTATE", location)
                 b = _expect_int(arr[x, y, 2], "ROTATE", location)
                 a = _expect_int(arr[x, y, 3], "ROTATE", location)
-                flat.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
+                pillow_bytes.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
 
-        im = Image.frombytes('RGBA', (w, h), bytes(flat))
-        im = im.rotate(float(degrees), resample=Image.BICUBIC, expand=False, fillcolor=(0, 0, 0, 0))
-        out_bytes = im.tobytes('raw', 'RGBA')
+        im = _PILImage.frombytes('RGBA', (w, h), bytes(pillow_bytes))
+        # Use a runtime-resolved resampling constant to satisfy type checkers
+        resample_const: Any = getattr(_PILImage, "BICUBIC", None)
+        if resample_const is None:
+            # Pillow 9.1+ may expose Resampling enum; try that then fallback to int 3
+            resample_const = getattr(_PILImage, "Resampling", None)
+        if resample_const is None:
+            resample_const = 3
+        im = im.rotate(float(degrees), resample=resample_const, expand=False, fillcolor=(0, 0, 0, 0))
+        out_bytes: bytes = im.tobytes('raw', 'RGBA')
         _Val = Value
-        _TINT = TYPE_INT
-        out_vals = [_Val(_TINT, int(b)) for b in out_bytes]
-        data = np.array(out_vals, dtype=object).reshape((h, w, 4)).transpose((1, 0, 2)).copy()
-        flat = np.array(data.flatten(), dtype=object)
-        return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=flat))
+        _TINT: str = TYPE_INT
+        out_vals: List[Value] = [_Val(_TINT, int(b)) for b in out_bytes]
+        pillow_data: np.ndarray = np.array(out_vals, dtype=object).reshape((h, w, 4)).transpose((1, 0, 2)).copy()
+        pillow_flat: np.ndarray = np.array(pillow_data.flatten(), dtype=object)
+        return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=pillow_flat))
     except Exception:
         # Fall back to numpy bilinear sampling
         import math
 
         cx = (w - 1) / 2.0
         cy = (h - 1) / 2.0
-        rad = math.radians(float(degrees))
-        c = math.cos(rad)
-        s = math.sin(rad)
+        rad: float = math.radians(float(degrees))
+        c: float = math.cos(rad)
+        s: float = math.sin(rad)
 
         out_flat: List[int] = [0] * (h * w * 4)
 
         _expect_int = interpreter._expect_int
         def sample_channel(sx: float, sy: float, ch: int) -> float:
             # Bilinear sample at floating point coordinates, return float
-            x0 = math.floor(sx)
-            y0 = math.floor(sy)
-            wx = sx - x0
-            wy = sy - y0
+            x0: int = math.floor(sx)
+            y0: int = math.floor(sy)
+            wx: float = sx - x0
+            wy: float = sy - y0
             def get(px: int, py: int) -> int:
                 if px < 0 or px >= w or py < 0 or py >= h:
                     return 0
                 return _expect_int(arr[px, py, ch], "ROTATE", location)
-            v00 = get(x0, y0)
-            v10 = get(x0 + 1, y0)
-            v01 = get(x0, y0 + 1)
-            v11 = get(x0 + 1, y0 + 1)
+            v00: int = get(x0, y0)
+            v10: int = get(x0 + 1, y0)
+            v01: int = get(x0, y0 + 1)
+            v11: int = get(x0 + 1, y0 + 1)
             return (1 - wx) * (1 - wy) * v00 + wx * (1 - wy) * v10 + (1 - wx) * wy * v01 + wx * wy * v11
 
         for yy in range(h):
@@ -769,12 +789,12 @@ def _op_rotate(interpreter, args, _arg_nodes, _env, location):
                 out_flat[base+2] = max(0, min(255, b))
                 out_flat[base+3] = max(0, min(255, a))
 
-        data = np.array([Value(TYPE_INT, int(v)) for v in out_flat], dtype=object).reshape((h, w, 4)).transpose((1, 0, 2)).copy()
-        flat = np.array(data.flatten(), dtype=object)
+        data: np.ndarray = np.array([Value(TYPE_INT, int(v)) for v in out_flat], dtype=object).reshape((h, w, 4)).transpose((1, 0, 2)).copy()
+        flat: np.ndarray = np.array(data.flatten(), dtype=object)
         return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=flat))
 
 
-def _op_grayscale(interpreter, args, _arg_nodes, _env, location):
+def _op_grayscale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
@@ -785,16 +805,16 @@ def _op_grayscale(interpreter, args, _arg_nodes, _env, location):
 
     w, h, _ = img.shape
     int_arr = _tensor_to_int_image(img, "GRAYSCALE", interpreter, location)
-    rgb = int_arr[:, :, :3].astype(float)
-    lum = np.clip(np.rint(rgb @ np.array([0.299, 0.587, 0.114])), 0, 255).astype(np.int32)
+    rgb: np.ndarray = int_arr[:, :, :3].astype(float)
+    lum: np.ndarray = np.clip(np.rint(rgb @ np.array([0.299, 0.587, 0.114])), 0, 255).astype(np.int32)
 
-    out_int = np.empty((w, h, 4), dtype=np.int32)
+    out_int: np.ndarray = np.empty((w, h, 4), dtype=np.int32)
     out_int[:, :, 0:3] = lum[..., None]
     out_int[:, :, 3] = int_arr[:, :, 3]
     return _value_tensor_from_ints(out_int)
 
 
-def _op_blur(interpreter, args, _arg_nodes, _env, location):
+def _op_blur(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
@@ -809,31 +829,31 @@ def _op_blur(interpreter, args, _arg_nodes, _env, location):
 
     w, h, _ = img.shape
     if radius == 0 or h == 0 or w == 0:
-        flat = np.array(img.data.flat, dtype=object)
+        flat: np.ndarray = np.array(img.data.flat, dtype=object)
         return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=flat))
 
     int_img = _tensor_to_int_image(img, "BLUR", interpreter, location)
 
-    sigma = max(0.5, radius / 2.0)
+    sigma: float = max(0.5, radius / 2.0)
     ksize = radius * 2 + 1
-    kernel = np.array([math.exp(-((i - radius) ** 2) / (2.0 * sigma * sigma)) for i in range(ksize)], dtype=float)
+    kernel: np.ndarray = np.array([math.exp(-((i - radius) ** 2) / (2.0 * sigma * sigma)) for i in range(ksize)], dtype=float)
     kernel /= kernel.sum()
 
     # Horizontal pass (axis 0) with edge padding
-    padded_x = np.pad(int_img.astype(float), ((radius, radius), (0, 0), (0, 0)), mode="edge")
-    stacked_x = np.stack([padded_x[i : i + w, :, :] for i in range(ksize)], axis=0)
-    tmp = np.tensordot(kernel, stacked_x, axes=(0, 0))
+    padded_x: np.ndarray = np.pad(int_img.astype(float), ((radius, radius), (0, 0), (0, 0)), mode="edge")
+    stacked_x: np.ndarray = np.stack([padded_x[i : i + w, :, :] for i in range(ksize)], axis=0)
+    tmp: np.ndarray = np.tensordot(kernel, stacked_x, axes=(0, 0))
 
     # Vertical pass (axis 1) with edge padding
-    padded_y = np.pad(tmp, ((0, 0), (radius, radius), (0, 0)), mode="edge")
-    stacked_y = np.stack([padded_y[:, i : i + h, :] for i in range(ksize)], axis=0)
-    out = np.tensordot(kernel, stacked_y, axes=(0, 0))
+    padded_y: np.ndarray = np.pad(tmp, ((0, 0), (radius, radius), (0, 0)), mode="edge")
+    stacked_y: np.ndarray = np.stack([padded_y[:, i : i + h, :] for i in range(ksize)], axis=0)
+    out: np.ndarray = np.tensordot(kernel, stacked_y, axes=(0, 0))
 
-    out_int = np.clip(np.rint(out), 0, 255).astype(np.int32)
+    out_int: np.ndarray = np.clip(np.rint(out), 0, 255).astype(np.int32)
     return _value_tensor_from_ints(out_int)
 
 
-def _op_polygon(interpreter, args, _arg_nodes, _env, location):
+def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_TNS, TYPE_INT, Tensor, Value
 
     # POLYGON(img, points, color, fill=1, thickness=1)
@@ -886,7 +906,7 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
     g = _expect_int(color_arr[1], "POLYGON", location)
     b = _expect_int(color_arr[2], "POLYGON", location)
     a = _expect_int(color_arr[3], "POLYGON", location)
-    color = (_clamp_channel(r), _clamp_channel(g), _clamp_channel(b), _clamp_channel(a))
+    color: Tuple[int, int, int, int] = (_clamp_channel(r), _clamp_channel(g), _clamp_channel(b), _clamp_channel(a))
 
     # Helper to blend a pixel if in bounds
     def blend(px: int, py: int) -> None:
@@ -896,11 +916,11 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
 
     # Bresenham integer line rasterization
     def draw_line(x0: int, y0: int, x1: int, y1: int) -> None:
-        dx = abs(x1 - x0)
-        dy = abs(y1 - y0)
+        dx: int = abs(x1 - x0)
+        dy: int = abs(y1 - y0)
         x, y = x0, y0
-        sx = 1 if x0 < x1 else -1
-        sy = 1 if y0 < y1 else -1
+        sx: int = 1 if x0 < x1 else -1
+        sy: int = 1 if y0 < y1 else -1
         if dx > dy:
             err = dx // 2
             while True:
@@ -929,13 +949,13 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
         if thickness <= 1:
             blend(cx, cy)
             return
-        rrad = max(0, int(math.floor(thickness / 2)))
+        rrad: int = max(0, int(math.floor(thickness / 2)))
         for dy in range(-rrad, rrad + 1):
-            yy = cy + dy
+            yy: int = cy + dy
             if yy < 0 or yy >= h:
                 continue
             for dx in range(-rrad, rrad + 1):
-                xx = cx + dx
+                xx: int = cx + dx
                 if xx < 0 or xx >= w:
                     continue
                 if dx * dx + dy * dy <= rrad * rrad:
@@ -950,12 +970,12 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
             x2, y2 = pts[i + 1]
             edges.append((x1, y1, x2, y2))
         # Bounding box
-        min_x = max(0, min(p[0] for p in pts))
-        max_x = min(w - 1, max(p[0] for p in pts))
-        min_y = max(0, min(p[1] for p in pts))
-        max_y = min(h - 1, max(p[1] for p in pts))
+        min_x: int = max(0, min(p[0] for p in pts))
+        max_x: int = min(w - 1, max(p[0] for p in pts))
+        min_y: int = max(0, min(p[1] for p in pts))
+        max_y: int = min(h - 1, max(p[1] for p in pts))
         for yy in range(min_y, max_y + 1):
-            scan_y = yy + 0.5
+            scan_y: float = yy + 0.5
             xs: List[float] = []
             for (x1, y1, x2, y2) in edges:
                 if (y1 <= scan_y < y2) or (y2 <= scan_y < y1):
@@ -967,10 +987,10 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
             xs.sort()
             i = 0
             while i + 1 < len(xs):
-                x_left = xs[i]
-                x_right = xs[i + 1]
-                x_start = max(0, int(math.ceil(x_left)))
-                x_end = min(w - 1, int(math.floor(x_right)))
+                x_left: float = xs[i]
+                x_right: float = xs[i + 1]
+                x_start: int = max(0, int(math.ceil(x_left)))
+                x_end: int = min(w - 1, int(math.floor(x_right)))
                 for xx in range(x_start, x_end + 1):
                     blend(xx, yy)
                 i += 2
@@ -987,12 +1007,12 @@ def _op_polygon(interpreter, args, _arg_nodes, _env, location):
             x2, y2 = pts[i + 1]
             draw_line(x1, y1, x2, y2)
 
-    flat = np.array(new_arr.flatten(), dtype=object)
+    flat: np.ndarray = np.array(new_arr.flatten(), dtype=object)
     return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=flat))
 
 
 
-def _op_ellipse(interpreter, args, _arg_nodes, _env, location):
+def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_TNS, Tensor, Value
     # New signature: ELLIPSE(img, center:TNS[2], rx, ry, color:TNS[4], fill=1, thickness=1)
     if len(args) < 5:
@@ -1051,7 +1071,7 @@ def _op_ellipse(interpreter, args, _arg_nodes, _env, location):
     g = interpreter._expect_int(color_arr[1], "ELLIPSE", location)
     b = interpreter._expect_int(color_arr[2], "ELLIPSE", location)
     a = interpreter._expect_int(color_arr[3], "ELLIPSE", location)
-    color = (_clamp_channel(r), _clamp_channel(g), _clamp_channel(b), _clamp_channel(a))
+    color: Tuple[int, int, int, int] = (_clamp_channel(r), _clamp_channel(g), _clamp_channel(b), _clamp_channel(a))
 
     # If center tensor was provided, extract cx, cy; otherwise use legacy values
     if center_t is not None:
@@ -1067,8 +1087,8 @@ def _op_ellipse(interpreter, args, _arg_nodes, _env, location):
     rx_f = float(rx)
     ry_f = float(ry)
 
-    inner_rx = max(0, rx - thickness)
-    inner_ry = max(0, ry - thickness)
+    inner_rx: int = max(0, rx - thickness)
+    inner_ry: int = max(0, ry - thickness)
     has_inner = (fill == 0 and inner_rx > 0 and inner_ry > 0)
     if fill == 0 and not has_inner:
         # If the outline would collapse, fall back to filled behavior
@@ -1083,46 +1103,46 @@ def _op_ellipse(interpreter, args, _arg_nodes, _env, location):
         if yy < 0 or yy >= h:
             continue
         dy = float(yy - cy0)
-        ny = dy / ry_f
+        ny: float = dy / ry_f
         for xx in range(x_start, x_end + 1):
             if xx < 0 or xx >= w:
                 continue
             dx = float(xx - cx0)
-            nx = dx / rx_f
-            dist = nx * nx + ny * ny
+            nx: float = dx / rx_f
+            dist: float = nx * nx + ny * ny
             if dist > 1.0:
                 continue
             if has_inner:
                 in_rx = float(inner_rx)
                 in_ry = float(inner_ry)
-                in_nx = dx / in_rx
-                in_ny = dy / in_ry
+                in_nx: float = dx / in_rx
+                in_ny: float = dy / in_ry
                 if (in_nx * in_nx + in_ny * in_ny) < 1.0:
                     continue
             _alpha_blend_pixel(new_arr, xx, yy, color, interpreter, "ELLIPSE", location)
 
-    flat = np.array(new_arr.flatten(), dtype=object)
+    flat: np.ndarray = np.array(new_arr.flatten(), dtype=object)
     return Value(TYPE_TNS, Tensor(shape=list(img.shape), data=flat))
 
 
 def _write_bmp_file(path: str, width: int, height: int, pixels: List[int]) -> None:
     # Write a simple 32-bit BMP (BGRA) uncompressed
     with open(path, "wb") as handle:
-        row_bytes = width * 4
+        row_bytes: int = width * 4
         pad = 0
         # File header (14 bytes)
         bfType = b'BM'
         bfOffBits = 14 + 40  # file header + info header
-        bfSize = bfOffBits + (row_bytes * height)
+        bfSize: int = bfOffBits + (row_bytes * height)
         handle.write(struct.pack('<2sIHHI', bfType, bfSize, 0, 0, bfOffBits))
         # BITMAPINFOHEADER (40 bytes)
         biSize = 40
-        biWidth = width
-        biHeight = height  # bottom-up
+        biWidth: int = width
+        biHeight: int = height  # bottom-up
         biPlanes = 1
         biBitCount = 32
         biCompression = 0
-        biSizeImage = row_bytes * height
+        biSizeImage: int = row_bytes * height
         biXPelsPerMeter = 0
         biYPelsPerMeter = 0
         biClrUsed = 0
@@ -1130,29 +1150,29 @@ def _write_bmp_file(path: str, width: int, height: int, pixels: List[int]) -> No
         handle.write(struct.pack('<IIIHHIIIIII', biSize, biWidth, biHeight, biPlanes, biBitCount, biCompression, biSizeImage, biXPelsPerMeter, biYPelsPerMeter, biClrUsed, biClrImportant))
         # Pixel data: BMP stores rows bottom-up, each pixel B G R A
         for y in range(height - 1, -1, -1):
-            row_start = y * width * 4
+            row_start: int = y * width * 4
             for x in range(width):
-                i = row_start + x * 4
-                r = pixels[i]
-                g = pixels[i + 1]
-                b = pixels[i + 2]
-                a = pixels[i + 3]
+                i: int = row_start + x * 4
+                r: int = pixels[i]
+                g: int = pixels[i + 1]
+                b: int = pixels[i + 2]
+                a: int = pixels[i + 3]
                 handle.write(struct.pack('<BBBB', b & 0xFF, g & 0xFF, r & 0xFF, a & 0xFF))
 
 
 def _save_with_gdiplus(path: str, width: int, height: int, pixels: List[int], fmt: str, quality: Optional[int] = None) -> None:
     gdiplus = _gdiplus_start()
     bitmap = ctypes.c_void_p()
-    stride = width * 4
-    buf_len = width * height * 4
-    buf = (ctypes.c_ubyte * buf_len)()
+    stride: int = width * 4
+    buf_len: int = width * height * 4
+    buf: Array[c_ubyte] = (ctypes.c_ubyte * buf_len)()
     # pixels are [r,g,b,a]
     for i in range(width * height):
-        r = int(pixels[i * 4]) & 0xFF
-        g = int(pixels[i * 4 + 1]) & 0xFF
-        b = int(pixels[i * 4 + 2]) & 0xFF
-        a = int(pixels[i * 4 + 3]) & 0xFF
-        idx = i * 4
+        r: int = int(pixels[i * 4]) & 0xFF
+        g: int = int(pixels[i * 4 + 1]) & 0xFF
+        b: int = int(pixels[i * 4 + 2]) & 0xFF
+        a: int = int(pixels[i * 4 + 3]) & 0xFF
+        idx: int = i * 4
         buf[idx] = b
         buf[idx + 1] = g
         buf[idx + 2] = r
@@ -1167,15 +1187,16 @@ def _save_with_gdiplus(path: str, width: int, height: int, pixels: List[int], fm
             _fields_ = [("Data1", ctypes.c_uint32), ("Data2", ctypes.c_uint16), ("Data3", ctypes.c_uint16), ("Data4", ctypes.c_ubyte * 8)]
 
         def _guid_from_str(s: str) -> GUID:
-            hexs = s.strip('{}').split('-')
+            hexs: List[str] = s.strip('{}').split('-')
             d1 = int(hexs[0], 16)
             d2 = int(hexs[1], 16)
             d3 = int(hexs[2], 16)
-            d4_bytes = bytes.fromhex(hexs[3] + hexs[4])
-            arr = (ctypes.c_ubyte * 8)(*d4_bytes)
+            d4_bytes: bytes = bytes.fromhex(hexs[3] + hexs[4])
+            arr: Array[c_ubyte] = (ctypes.c_ubyte * 8)(*d4_bytes)
             return GUID(d1, d2, d3, arr)
 
         # Known encoder CLSIDs
+        clsid = None
         if fmt.upper() == "PNG":
             clsid = _guid_from_str('{557CF406-1A04-11D3-9A73-0000F81EF32E}')
         elif fmt.upper() == "JPEG" or fmt.upper() == "JPG":
@@ -1193,13 +1214,13 @@ def _save_with_gdiplus(path: str, width: int, height: int, pixels: List[int], fm
             pass
 
 
-def _op_save_bmp(interpreter, args, _arg_nodes, _env, location):
+def _op_save_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_TNS, TYPE_STR, Value
 
     if len(args) < 2:
         raise ASMRuntimeError("SAVE_BMP expects 2 arguments", location=location, rewrite_rule="SAVE_BMP")
     t = interpreter._expect_tns(args[0], "SAVE_BMP", location)
-    path = _expect_str(args[1], "SAVE_BMP", location)
+    path: str = _expect_str(args[1], "SAVE_BMP", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
         raise ASMRuntimeError("SAVE_BMP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_BMP")
     w, h, _ = t.shape
@@ -1219,13 +1240,13 @@ def _op_save_bmp(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_STR, "OK")
 
 
-def _op_save_png(interpreter, args, _arg_nodes, _env, location):
+def _op_save_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_STR, Value
 
     if len(args) < 3:
         raise ASMRuntimeError("SAVE_PNG expects 3 arguments", location=location, rewrite_rule="SAVE_PNG")
     t = interpreter._expect_tns(args[0], "SAVE_PNG", location)
-    path = _expect_str(args[1], "SAVE_PNG", location)
+    path: str = _expect_str(args[1], "SAVE_PNG", location)
     level = interpreter._expect_int(args[2], "SAVE_PNG", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
         raise ASMRuntimeError("SAVE_PNG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_PNG")
@@ -1242,9 +1263,9 @@ def _op_save_png(interpreter, args, _arg_nodes, _env, location):
             flat.extend((r & 0xFF, g & 0xFF, b & 0xFF, a & 0xFF))
     # Try Pillow first
     try:
-        from PIL import Image
+        from PIL import Image as _PILImage
 
-        im = Image.frombytes('RGBA', (w, h), bytes(flat))
+        im: Any = _PILImage.frombytes('RGBA', (w, h), bytes(flat))
         im.save(path, compress_level=max(0, min(9, int(level))))
         return Value(TYPE_STR, "OK")
     except Exception:
@@ -1259,13 +1280,13 @@ def _op_save_png(interpreter, args, _arg_nodes, _env, location):
     raise ASMRuntimeError("SAVE_PNG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_PNG")
 
 
-def _op_save_jpeg(interpreter, args, _arg_nodes, _env, location):
+def _op_save_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_STR, Value
 
     if len(args) < 3:
         raise ASMRuntimeError("SAVE_JPEG expects 3 arguments", location=location, rewrite_rule="SAVE_JPEG")
     t = interpreter._expect_tns(args[0], "SAVE_JPEG", location)
-    path = _expect_str(args[1], "SAVE_JPEG", location)
+    path: str = _expect_str(args[1], "SAVE_JPEG", location)
     quality = interpreter._expect_int(args[2], "SAVE_JPEG", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
         raise ASMRuntimeError("SAVE_JPEG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_JPEG")
@@ -1282,9 +1303,9 @@ def _op_save_jpeg(interpreter, args, _arg_nodes, _env, location):
             flat.extend((r & 0xFF, g & 0xFF, b & 0xFF))
     # Try Pillow
     try:
-        from PIL import Image
+        from PIL import Image as _PILImage
 
-        im = Image.frombytes('RGB', (w, h), bytes(flat))
+        im: Any = _PILImage.frombytes('RGB', (w, h), bytes(flat))
         im.save(path, quality=max(1, min(95, int(quality))))
         return Value(TYPE_STR, "OK")
     except Exception:
@@ -1311,7 +1332,7 @@ def _op_save_jpeg(interpreter, args, _arg_nodes, _env, location):
 
 # ---- Registration ----
 
-def _op_replace_color(interpreter, args, _arg_nodes, _env, location):
+def _op_replace_color(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 3:
@@ -1345,11 +1366,11 @@ def _op_replace_color(interpreter, args, _arg_nodes, _env, location):
     s_a = interpreter._expect_int(s_arr[3], "REPLACE_COLOR", location) if s_has_alpha else None
 
     # Extract destination color components (clamped to 0..255)
-    d_r = _clamp_channel(interpreter._expect_int(d_arr[0], "REPLACE_COLOR", location))
-    d_g = _clamp_channel(interpreter._expect_int(d_arr[1], "REPLACE_COLOR", location))
-    d_b = _clamp_channel(interpreter._expect_int(d_arr[2], "REPLACE_COLOR", location))
+    d_r: int = _clamp_channel(interpreter._expect_int(d_arr[0], "REPLACE_COLOR", location))
+    d_g: int = _clamp_channel(interpreter._expect_int(d_arr[1], "REPLACE_COLOR", location))
+    d_b: int = _clamp_channel(interpreter._expect_int(d_arr[2], "REPLACE_COLOR", location))
     d_has_alpha = (dst_col_t.shape[0] == 4)
-    d_a = _clamp_channel(interpreter._expect_int(d_arr[3], "REPLACE_COLOR", location)) if d_has_alpha else None
+    d_a: int | None = _clamp_channel(interpreter._expect_int(d_arr[3], "REPLACE_COLOR", location)) if d_has_alpha else None
 
     # Build match mask using the compact int view
     match_mask = (img_int[:, :, 0] == s_r) & (img_int[:, :, 1] == s_g) & (img_int[:, :, 2] == s_b)
@@ -1367,17 +1388,18 @@ def _op_replace_color(interpreter, args, _arg_nodes, _env, location):
     out_view = arr_view.copy()
 
     xs, ys = np.nonzero(match_mask)
-    n = xs.size
+    n: int = xs.size
     if n:
         # Create replacement Value objects only for matched pixels
-        vr = [Value(TYPE_INT, int(d_r)) for _ in range(n)]
-        vg = [Value(TYPE_INT, int(d_g)) for _ in range(n)]
-        vb = [Value(TYPE_INT, int(d_b)) for _ in range(n)]
+        vr: List[Value] = [Value(TYPE_INT, int(d_r)) for _ in range(n)]
+        vg: List[Value] = [Value(TYPE_INT, int(d_g)) for _ in range(n)]
+        vb: List[Value] = [Value(TYPE_INT, int(d_b)) for _ in range(n)]
         out_view[xs, ys, 0] = vr
         out_view[xs, ys, 1] = vg
         out_view[xs, ys, 2] = vb
         if d_has_alpha:
-            va = [Value(TYPE_INT, int(d_a)) for _ in range(n)]
+            assert d_a is not None
+            va: List[Value] = [Value(TYPE_INT, int(d_a)) for _ in range(n)]
             out_view[xs, ys, 3] = va
 
     # Flatten back to the interpreter's Tensor data layout and return
@@ -1385,7 +1407,7 @@ def _op_replace_color(interpreter, args, _arg_nodes, _env, location):
     return Value(TYPE_TNS, Tensor(shape=[int(shape[0]), int(shape[1]), int(shape[2])], data=out_flat))
 
 
-def _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel: int, rule: str):
+def _op_thresh_generic(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any, channel: int, rule: str) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
@@ -1427,38 +1449,38 @@ def _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel: i
     return _value_tensor_from_ints(arr_int)
 
 
-def _op_thresh_a(interpreter, args, _arg_nodes, _env, location):
+def _op_thresh_a(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=3, rule="THRESHHOLD_A")
 
 
-def _op_thresh_r(interpreter, args, _arg_nodes, _env, location):
+def _op_thresh_r(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=0, rule="THRESHHOLD_R")
 
 
-def _op_thresh_g(interpreter, args, _arg_nodes, _env, location):
+def _op_thresh_g(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=1, rule="THRESHHOLD_G")
 
 
-def _op_thresh_b(interpreter, args, _arg_nodes, _env, location):
+def _op_thresh_b(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     return _op_thresh_generic(interpreter, args, _arg_nodes, _env, location, channel=2, rule="THRESHHOLD_B")
 
 
-def _op_render_text(interpreter, args, _arg_nodes, _env, location):
+def _op_render_text(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # Signature: RENDER_TEXT(STR: text, INT: size, STR: font_path = "", TNS: color = [11111111,11111111,11111111,11111111], TNS: bgcolor = [11111111,11111111,11111111,11111111], INT: antialiasing = 1):TNS
     if len(args) < 2:
         raise ASMRuntimeError("RENDER_TEXT expects at least 2 arguments", location=location, rewrite_rule="RENDER_TEXT")
 
-    text = _expect_str(args[0], "RENDER_TEXT", location)
+    text: str = _expect_str(args[0], "RENDER_TEXT", location)
     size = interpreter._expect_int(args[1], "RENDER_TEXT", location)
 
-    font_path = ""
+    font_path: str = ""
     if len(args) >= 3:
         font_path = _expect_str(args[2], "RENDER_TEXT", location)
 
     # default color/background: binary literal 11111111 == 255 each channel
-    def _tns_to_rgba(tns_val, name: str):
+    def _tns_to_rgba(tns_val, name: str) -> Tuple[int, int, int, int]:
         if getattr(tns_val, "type", None) != TYPE_TNS:
             raise ASMRuntimeError(f"{name} must be a TNS of length 4", location=location, rewrite_rule="RENDER_TEXT")
         if len(tns_val.shape) != 1 or tns_val.shape[0] != 4:
@@ -1471,12 +1493,12 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
         return (_clamp_channel(int(r)), _clamp_channel(int(g)), _clamp_channel(int(b)), _clamp_channel(int(a)))
 
     if len(args) >= 4:
-        color = _tns_to_rgba(interpreter._expect_tns(args[3], "RENDER_TEXT", location), "color")
+        color: Tuple[int, int, int, int] = _tns_to_rgba(interpreter._expect_tns(args[3], "RENDER_TEXT", location), "color")
     else:
         color = (255, 255, 255, 255)
 
     if len(args) >= 5:
-        bgcolor = _tns_to_rgba(interpreter._expect_tns(args[4], "RENDER_TEXT", location), "bgcolor")
+        bgcolor: Tuple[int, int, int, int] = _tns_to_rgba(interpreter._expect_tns(args[4], "RENDER_TEXT", location), "bgcolor")
     else:
         bgcolor = (255, 255, 255, 255)
 
@@ -1490,7 +1512,7 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
             import ctypes
             from ctypes import wintypes
 
-            gdi32 = ctypes.windll.gdi32
+            gdi32: WinDLL = ctypes.windll.gdi32
 
             # Create a memory DC
             hdc = gdi32.CreateCompatibleDC(0)
@@ -1519,9 +1541,9 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
             CLIP_DEFAULT_PRECIS = 0
             DEFAULT_QUALITY = 0
             ANTIALIASED_QUALITY = 4
-            QUALITY = ANTIALIASED_QUALITY if antialiasing else DEFAULT_QUALITY
+            QUALITY: int = ANTIALIASED_QUALITY if antialiasing else DEFAULT_QUALITY
 
-            CreateFontW = gdi32.CreateFontW
+            CreateFontW: Any = gdi32.CreateFontW
             CreateFontW.argtypes = [wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.INT, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR]
             CreateFontW.restype = wintypes.HANDLE
 
@@ -1536,7 +1558,7 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
             class SIZE(ctypes.Structure):
                 _fields_ = [("cx", wintypes.INT), ("cy", wintypes.INT)]
 
-            GetTextExtentPoint32W = gdi32.GetTextExtentPoint32W
+            GetTextExtentPoint32W: Any = gdi32.GetTextExtentPoint32W
             GetTextExtentPoint32W.argtypes = [wintypes.HDC, wintypes.LPCWSTR, ctypes.c_int, ctypes.POINTER(SIZE)]
             GetTextExtentPoint32W.restype = wintypes.BOOL
 
@@ -1549,8 +1571,8 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
                 gdi32.DeleteDC(hdc)
                 raise RuntimeError("GetTextExtentPoint32W failed")
 
-            tex_w = max(1, int(size_struct.cx))
-            tex_h = max(1, int(size_struct.cy))
+            tex_w: int = max(1, int(size_struct.cx))
+            tex_h: int = max(1, int(size_struct.cy))
 
             # Prepare BITMAPINFO for 32-bit RGBA top-down
             class BITMAPINFOHEADER(ctypes.Structure):
@@ -1581,7 +1603,7 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
             bmi.bmiHeader.biCompression = 0  # BI_RGB
 
             ppvBits = ctypes.c_void_p()
-            CreateDIBSection = gdi32.CreateDIBSection
+            CreateDIBSection: Any = gdi32.CreateDIBSection
             CreateDIBSection.argtypes = [wintypes.HDC, ctypes.POINTER(BITMAPINFO), wintypes.UINT, ctypes.POINTER(ctypes.c_void_p), wintypes.HANDLE, wintypes.DWORD]
             CreateDIBSection.restype = wintypes.HBITMAP
 
@@ -1595,18 +1617,18 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
             old_bmp = gdi32.SelectObject(hdc, hbitmap)
 
             # Clear buffer
-            buf_len = tex_w * tex_h * 4
+            buf_len: int = tex_w * tex_h * 4
             ctypes.memset(ppvBits, 0, buf_len)
 
             # Set text color
             r, g, b, a = color
-            colorref = (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16)
+            colorref: int = (r & 0xFF) | ((g & 0xFF) << 8) | ((b & 0xFF) << 16)
             gdi32.SetTextColor(hdc, colorref)
             # Transparent background
             gdi32.SetBkMode(hdc, 1)  # TRANSPARENT
 
             # Draw text at origin
-            ExtTextOutW = gdi32.ExtTextOutW
+            ExtTextOutW: Any = gdi32.ExtTextOutW
             ExtTextOutW.argtypes = [wintypes.HDC, wintypes.INT, wintypes.INT, wintypes.UINT, ctypes.c_void_p, wintypes.LPCWSTR, wintypes.UINT, ctypes.c_void_p]
             ExtTextOutW.restype = wintypes.BOOL
 
@@ -1621,13 +1643,14 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
                 raise RuntimeError("ExtTextOutW failed")
 
             # Read pixels (BGRA in memory)
+            ppv_addr: int = int(ppvBits.value)
             buf_type = ctypes.c_ubyte * buf_len
-            buf = buf_type.from_address(ppvBits.value)
+            buf: Array[c_ubyte] = buf_type.from_address(ppv_addr)
             pixels: List[int] = []
             for y in range(tex_h):
-                row_base = y * tex_w * 4
+                row_base: int = y * tex_w * 4
                 for x in range(tex_w):
-                    idx = row_base + x * 4
+                    idx: int = row_base + x * 4
                     bb = buf[idx]
                     gg = buf[idx + 1]
                     rr = buf[idx + 2]
@@ -1864,7 +1887,7 @@ def _op_render_text(interpreter, args, _arg_nodes, _env, location):
     except Exception as exc:
         raise ASMRuntimeError(f"RENDER_TEXT failed: {exc}", location=location, rewrite_rule="RENDER_TEXT")
 
-def _op_crop(interpreter, args, _arg_nodes, _env, location):
+def _op_crop(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 2:
@@ -1885,12 +1908,12 @@ def _op_crop(interpreter, args, _arg_nodes, _env, location):
         cy = interpreter._expect_int(pts_arr[i, 1], "CROP", location)
         coords.append((int(cx), int(cy)))
 
-    xs = [c[0] for c in coords]
-    ys = [c[1] for c in coords]
-    left = min(xs)
-    right = max(xs)
-    top = min(ys)
-    bottom = max(ys)
+    xs: List[int] = [c[0] for c in coords]
+    ys: List[int] = [c[1] for c in coords]
+    left: int = min(xs)
+    right: int = max(xs)
+    top: int = min(ys)
+    bottom: int = max(ys)
 
     # Validate source image
     if len(img.shape) != 3 or img.shape[2] != 4:
@@ -1899,16 +1922,16 @@ def _op_crop(interpreter, args, _arg_nodes, _env, location):
     w_src, h_src, _ = img.shape
 
     # Convert to 0-based and clamp to image bounds
-    left0 = max(0, left - 1)
-    right0 = min(w_src - 1, right - 1)
-    top0 = max(0, top - 1)
-    bottom0 = min(h_src - 1, bottom - 1)
+    left0: int = max(0, left - 1)
+    right0: int = min(w_src - 1, right - 1)
+    top0: int = max(0, top - 1)
+    bottom0: int = min(h_src - 1, bottom - 1)
 
     if right0 < left0 or bottom0 < top0:
         raise ASMRuntimeError("CROP: invalid crop rectangle", location=location, rewrite_rule="CROP")
 
-    out_w = right0 - left0 + 1
-    out_h = bottom0 - top0 + 1
+    out_w: int = right0 - left0 + 1
+    out_h: int = bottom0 - top0 + 1
 
     interpreter.builtins._ensure_tensor_ints(img, "CROP", location)
     # Reshape to [w][h][4] view of Value objects (x, y, c)
@@ -1916,23 +1939,23 @@ def _op_crop(interpreter, args, _arg_nodes, _env, location):
 
     # Slice the region once (view of Value objects) and convert to raw ints
     region = img_arr[left0 : right0 + 1, top0 : bottom0 + 1, :]
-    total = out_h * out_w * 4
+    total: int = out_h * out_w * 4
 
     # Create a fast iterator over the underlying integer values. Using
     # np.fromiter avoids slow Python-level loops and per-channel expectation
     # calls inside nested loops. We still rely on _ensure_tensor_ints
     # previously called to validate types.
-    def _val_iter():
+    def _val_iter() -> Generator[int, Any, None]:
         for v in region.flatten():
             # v is a Value object with .value attribute holding an int
             yield int(v.value)
 
-    flat_ints = np.fromiter(_val_iter(), dtype=np.int64, count=total)
+    flat_ints: np.ndarray = np.fromiter(_val_iter(), dtype=np.int64, count=total)
     flat_list = flat_ints.tolist()
     return _make_tensor_from_pixels(out_w, out_h, flat_list, "CROP", location)
 
 
-def _op_invert(interpreter, args, _arg_nodes, _env, location):
+def _op_invert(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
@@ -1950,7 +1973,7 @@ def _op_invert(interpreter, args, _arg_nodes, _env, location):
     # elementwise ops so thread workers can run concurrently.
     out_arr = np.empty_like(int_arr)
     pixel_count = w * h
-    max_workers = min(max(1, os.cpu_count() or 1), max(1, w))
+    max_workers: int = min(max(1, os.cpu_count() or 1), max(1, w))
     # For small images, threading overhead dominates; keep it single-threaded.
     if pixel_count < 65_536 or max_workers == 1:
         out_arr[:, :, :3] = 255 - (int_arr[:, :, :3] & 0xFF)
@@ -1965,14 +1988,14 @@ def _op_invert(interpreter, args, _arg_nodes, _env, location):
             out_arr[lo:hi, :, 3] = int_arr[lo:hi, :, 3]
 
         with ThreadPoolExecutor(max_workers=len(ranges)) as pool:
-            futures = [pool.submit(_invert_slice, lo, hi) for lo, hi in ranges]
+            futures: List[Future[None]] = [pool.submit(_invert_slice, lo, hi) for lo, hi in ranges]
             for fut in futures:
                 fut.result()
 
     return _value_tensor_from_ints(out_arr)
 
 
-def _op_edge(interpreter, args, _arg_nodes, _env, location):
+def _op_edge(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
@@ -1989,9 +2012,9 @@ def _op_edge(interpreter, args, _arg_nodes, _env, location):
 
     # Fast path: build an int numpy array of shape (w,h,4) using fromiter
     total = w * h * 4
-    flat_iter = (int(v.value) for v in arr.flatten())
-    flat_ints = np.fromiter(flat_iter, dtype=np.int64, count=total)
-    int_arr = flat_ints.reshape((w, h, 4))
+    flat_iter: Generator[int, None, None] = (int(v.value) for v in arr.flatten())
+    flat_ints: np.ndarray = np.fromiter(flat_iter, dtype=np.int64, count=total)
+    int_arr: np.ndarray = flat_ints.reshape((w, h, 4))
 
     # Compute luminance vectorized: shape (w,h)
     lum = (0.299 * int_arr[:, :, 0].astype(float)
@@ -2002,9 +2025,9 @@ def _op_edge(interpreter, args, _arg_nodes, _env, location):
     def _gaussian_blur_2d(src: np.ndarray, radius: int) -> np.ndarray:
         if radius <= 0:
             return src.copy()
-        sigma = max(0.5, radius / 2.0)
-        ksize = radius * 2 + 1
-        kernel = np.array([math.exp(-((i - radius) ** 2) / (2.0 * sigma * sigma)) for i in range(ksize)], dtype=float)
+        sigma: float = max(0.5, radius / 2.0)
+        ksize: int = radius * 2 + 1
+        kernel: np.ndarray = np.array([math.exp(-((i - radius) ** 2) / (2.0 * sigma * sigma)) for i in range(ksize)], dtype=float)
         kernel /= kernel.sum()
 
         # horizontal pass: convolve along x for each y (use numpy.convolve C implementation)
@@ -2022,10 +2045,10 @@ def _op_edge(interpreter, args, _arg_nodes, _env, location):
                 out_arr[x, :] = np.convolve(tmp[x, :], kernel, mode='same')
 
         # Decide whether to parallelize based on size to avoid overhead on tiny images
-        cpu = max(1, os.cpu_count() or 1)
+        cpu: int = max(1, os.cpu_count() or 1)
         # Parallelize across the smaller dimension for better load balance
-        horiz_workers = min(cpu, max(1, ny))
-        vert_workers = min(cpu, max(1, nx))
+        horiz_workers: int = min(cpu, max(1, ny))
+        vert_workers: int = min(cpu, max(1, nx))
 
         if nx * ny < 65_536 or (horiz_workers == 1 and vert_workers == 1):
             # small image: do sequential
@@ -2061,17 +2084,17 @@ def _op_edge(interpreter, args, _arg_nodes, _env, location):
     dog = small - large
 
     mag = np.abs(dog)
-    maxv = float(mag.max()) if mag.size > 0 else 0.0
+    maxv: float = float(mag.max()) if mag.size > 0 else 0.0
     if maxv <= 0.0:
         scaled = np.zeros_like(mag, dtype=np.int32)
     else:
         scaled = np.clip(np.round((mag / maxv) * 255.0), 0, 255).astype(np.int32)
 
     # Build output 4-channel image efficiently: R=G=B=scaled magnitude, alpha preserved
-    alpha_flat = int_arr[:, :, 3].flatten().astype(np.int32)
+    alpha_flat: np.ndarray = int_arr[:, :, 3].flatten().astype(np.int32)
     total_pix = w * h
     out_flat_ints = np.empty(total_pix * 4, dtype=np.int32)
-    vals = scaled.flatten()
+    vals: np.ndarray = scaled.flatten()
     out_flat_ints[0::4] = vals
     out_flat_ints[1::4] = vals
     out_flat_ints[2::4] = vals
@@ -2079,12 +2102,12 @@ def _op_edge(interpreter, args, _arg_nodes, _env, location):
 
     # Wrap into Value objects (one list comprehension over ints)
     _Val = Value
-    _TINT = TYPE_INT
-    flat_objs = [_Val(_TINT, int(v)) for v in out_flat_ints]
-    data = np.array(flat_objs, dtype=object)
+    _TINT: str = TYPE_INT
+    flat_objs: List[Value] = [_Val(_TINT, int(v)) for v in out_flat_ints]
+    data: np.ndarray = np.array(flat_objs, dtype=object)
     return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
 
-def _op_cellshade(interpreter, args, _arg_nodes, _env, location):
+def _op_cellshade(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
     from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 2:
@@ -2124,11 +2147,11 @@ def _op_cellshade(interpreter, args, _arg_nodes, _env, location):
 
     # Build integer image array
     total = w * h * 4
-    flat_iter = (int(v.value) for v in img_arr.flatten())
-    flat_ints = np.fromiter(flat_iter, dtype=np.int64, count=total)
-    int_img = flat_ints.reshape((w, h, 4)).astype(np.int32)
+    flat_iter: Generator[int, None, None] = (int(v.value) for v in img_arr.flatten())
+    flat_ints: np.ndarray = np.fromiter(flat_iter, dtype=np.int64, count=total)
+    int_img: np.ndarray = flat_ints.reshape((w, h, 4)).astype(np.int32)
 
-    rgb = int_img[:, :, :3]
+    rgb: np.ndarray = int_img[:, :, :3]
 
     # Compute squared distances to palette colors using broadcasting
     # resulting shape: (w, h, n)
@@ -2137,7 +2160,7 @@ def _op_cellshade(interpreter, args, _arg_nodes, _env, location):
     idx = np.argmin(d2, axis=2)
 
     # Build output int array
-    out_ints = np.empty((w, h, 4), dtype=np.int32)
+    out_ints: np.ndarray = np.empty((w, h, 4), dtype=np.int32)
     for i in range(pal_rgb.shape[0]):
         mask = (idx == i)
         out_ints[mask, 0] = pal_rgb[i, 0]
@@ -2151,9 +2174,9 @@ def _op_cellshade(interpreter, args, _arg_nodes, _env, location):
 
     # Convert to Value objects
     _Val = Value
-    _TINT = TYPE_INT
-    flat_objs = [_Val(_TINT, int(v)) for v in out_ints.flatten()]
-    data = np.array(flat_objs, dtype=object)
+    _TINT: str = TYPE_INT
+    flat_objs: List[Value] = [_Val(_TINT, int(v)) for v in out_ints.flatten()]
+    data: np.ndarray = np.array(flat_objs, dtype=object)
     return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
 
 def asm_lang_register(ext: ExtensionAPI) -> None:

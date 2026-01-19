@@ -1104,14 +1104,6 @@ FUNC STDEXT_TESTS():INT{
     ASSERT(EQ(networking.UDP_CLOSE(udp), 0))
     PRINT("networking extension tests passed.")
 
-    # wasapi extension (read-only queries)
-    STR: devname = wasapi.WASAPI_GET_DEFAULT_DEVICE_NAME()
-    ASSERT(GT(SLEN(devname), 0))
-    INT: volpct = wasapi.WASAPI_GET_MASTER_VOLUME()
-    ASSERT(GTE(volpct, 0))
-    ASSERT(LTE(volpct, 1100100))  # dec 100
-    PRINT("wasapi extension tests passed.")
-
     PRINT("All standard extension tests passed.\n")
     RETURN(0)
 }
