@@ -443,6 +443,24 @@ FUNC BUILTIN_TESTS():INT{
     DEL(ser_ms)
     DEL(ser_m2)
 
+    # SER/UNSER round-trip (FUNC/THR)
+    FUNC: ser_fn = LAMBDA(INT: x):INT{ RETURN( ADD(x, 1) ) }
+    STR: ser_fn_s = SER(ser_fn)
+    FUNC: ser_fn2 = UNSER(ser_fn_s)
+    ASSERT( EQ( ser_fn2(1), 10 ) )
+    DEL(ser_fn)
+    DEL(ser_fn_s)
+    DEL(ser_fn2)
+
+    THR(tser){ }
+    STR: ser_thr = SER(tser)
+    THR: ser_thr2 = UNSER(ser_thr)
+    ASSERT( EQ( TYPE(ser_thr2), "THR" ) )
+    AWAIT(ser_thr2)
+    DEL(tser)
+    DEL(ser_thr)
+    DEL(ser_thr2)
+
     # ROUND (binary float semantics)
     ASSERT( EQ( ROUND(0.11, "floor", 1), 0.1 ) )
     ASSERT( EQ( ROUND(0.11, "ceiling", 1), 1.0 ) )

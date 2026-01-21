@@ -2706,7 +2706,203 @@ class Builtins:
         if len(args) != 1:
             raise ASMRuntimeError("SER expects one argument", location=location, rewrite_rule="SER")
 
+        env_ids: Dict[int, str] = {}
+        env_done: set[str] = set()
+        env_in_progress: set[str] = set()
+        func_in_progress: set[str] = set()
+        next_env_id = 0
+
+        def ser_loc(loc: Optional[SourceLocation]) -> Dict[str, Any]:
+            if loc is None:
+                return {"file": "<unknown>", "line": 1, "column": 1, "statement": ""}
+            return {
+                "file": loc.file,
+                "line": loc.line,
+                "column": loc.column,
+                "statement": loc.statement,
+            }
+
+        def ser_ast(node: Any) -> Any:
+            if node is None:
+                return None
+            if isinstance(node, Program):
+                return {"n": "Program", "loc": ser_loc(node.location), "statements": [ser_ast(s) for s in node.statements]}
+            if isinstance(node, Block):
+                return {"n": "Block", "loc": ser_loc(node.location), "statements": [ser_ast(s) for s in node.statements]}
+            if isinstance(node, Assignment):
+                return {
+                    "n": "Assignment",
+                    "loc": ser_loc(node.location),
+                    "target": node.target,
+                    "declared_type": node.declared_type,
+                    "expression": ser_ast(node.expression),
+                }
+            if isinstance(node, Declaration):
+                return {
+                    "n": "Declaration",
+                    "loc": ser_loc(node.location),
+                    "name": node.name,
+                    "declared_type": node.declared_type,
+                }
+            if isinstance(node, ExpressionStatement):
+                return {"n": "ExpressionStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, IfBranch):
+                return {"n": "IfBranch", "condition": ser_ast(node.condition), "block": ser_ast(node.block)}
+            if isinstance(node, IfStatement):
+                return {
+                    "n": "IfStatement",
+                    "loc": ser_loc(node.location),
+                    "condition": ser_ast(node.condition),
+                    "then_block": ser_ast(node.then_block),
+                    "elifs": [ser_ast(b) for b in node.elifs],
+                    "else_block": ser_ast(node.else_block),
+                }
+            if isinstance(node, WhileStatement):
+                return {"n": "WhileStatement", "loc": ser_loc(node.location), "condition": ser_ast(node.condition), "block": ser_ast(node.block)}
+            if isinstance(node, ForStatement):
+                return {
+                    "n": "ForStatement",
+                    "loc": ser_loc(node.location),
+                    "counter": node.counter,
+                    "target_expr": ser_ast(node.target_expr),
+                    "block": ser_ast(node.block),
+                }
+            if isinstance(node, ParForStatement):
+                return {
+                    "n": "ParForStatement",
+                    "loc": ser_loc(node.location),
+                    "counter": node.counter,
+                    "target_expr": ser_ast(node.target_expr),
+                    "block": ser_ast(node.block),
+                }
+            if isinstance(node, FuncDef):
+                return {
+                    "n": "FuncDef",
+                    "loc": ser_loc(node.location),
+                    "name": node.name,
+                    "params": [ser_ast(p) for p in node.params],
+                    "return_type": node.return_type,
+                    "body": ser_ast(node.body),
+                }
+            if isinstance(node, LambdaExpression):
+                return {
+                    "n": "LambdaExpression",
+                    "loc": ser_loc(node.location),
+                    "params": [ser_ast(p) for p in node.params],
+                    "return_type": node.return_type,
+                    "body": ser_ast(node.body),
+                }
+            if isinstance(node, Param):
+                return {"n": "Param", "type": node.type, "name": node.name, "default": ser_ast(node.default)}
+            if isinstance(node, ReturnStatement):
+                return {"n": "ReturnStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, PopStatement):
+                return {"n": "PopStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, BreakStatement):
+                return {"n": "BreakStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, GotoStatement):
+                return {"n": "GotoStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, GotopointStatement):
+                return {"n": "GotopointStatement", "loc": ser_loc(node.location), "expression": ser_ast(node.expression)}
+            if isinstance(node, ContinueStatement):
+                return {"n": "ContinueStatement", "loc": ser_loc(node.location)}
+            if isinstance(node, AsyncStatement):
+                return {"n": "AsyncStatement", "loc": ser_loc(node.location), "block": ser_ast(node.block)}
+            if isinstance(node, ThrStatement):
+                return {"n": "ThrStatement", "loc": ser_loc(node.location), "symbol": node.symbol, "block": ser_ast(node.block)}
+            if isinstance(node, TryStatement):
+                return {
+                    "n": "TryStatement",
+                    "loc": ser_loc(node.location),
+                    "try_block": ser_ast(node.try_block),
+                    "catch_symbol": node.catch_symbol,
+                    "catch_block": ser_ast(node.catch_block),
+                }
+            if isinstance(node, Literal):
+                return {
+                    "n": "Literal",
+                    "loc": ser_loc(node.location),
+                    "value": node.value,
+                    "literal_type": node.literal_type,
+                }
+            if isinstance(node, TensorLiteral):
+                return {"n": "TensorLiteral", "loc": ser_loc(node.location), "items": [ser_ast(x) for x in node.items]}
+            if isinstance(node, MapLiteral):
+                return {
+                    "n": "MapLiteral",
+                    "loc": ser_loc(node.location),
+                    "items": [{"k": ser_ast(k), "v": ser_ast(v)} for k, v in node.items],
+                }
+            if isinstance(node, AsyncExpression):
+                return {"n": "AsyncExpression", "loc": ser_loc(node.location), "block": ser_ast(node.block)}
+            if isinstance(node, IndexExpression):
+                return {
+                    "n": "IndexExpression",
+                    "loc": ser_loc(node.location),
+                    "base": ser_ast(node.base),
+                    "indices": [ser_ast(x) for x in node.indices],
+                    "is_map": bool(node.is_map),
+                }
+            if isinstance(node, Range):
+                return {"n": "Range", "loc": ser_loc(node.location), "lo": ser_ast(node.lo), "hi": ser_ast(node.hi)}
+            if isinstance(node, Star):
+                return {"n": "Star", "loc": ser_loc(node.location)}
+            if isinstance(node, Identifier):
+                return {"n": "Identifier", "loc": ser_loc(node.location), "name": node.name}
+            if isinstance(node, PointerExpression):
+                return {"n": "PointerExpression", "loc": ser_loc(node.location), "target": node.target}
+            if isinstance(node, TypedTarget):
+                return {"n": "TypedTarget", "loc": ser_loc(node.location), "declared_type": node.declared_type, "target": ser_ast(node.target)}
+            if isinstance(node, CallExpression):
+                return {
+                    "n": "CallExpression",
+                    "loc": ser_loc(node.location),
+                    "callee": ser_ast(node.callee),
+                    "args": [ser_ast(a) for a in node.args],
+                }
+            if isinstance(node, CallArgument):
+                return {"n": "CallArgument", "name": node.name, "expression": ser_ast(node.expression)}
+            if isinstance(node, TensorSetStatement):
+                return {
+                    "n": "TensorSetStatement",
+                    "loc": ser_loc(node.location),
+                    "target": ser_ast(node.target),
+                    "value": ser_ast(node.value),
+                }
+            return None
+
+        def ser_env(env: Optional[Environment]) -> Any:
+            nonlocal next_env_id
+            if env is None:
+                return None
+            env_id = env_ids.get(id(env))
+            if env_id is None:
+                next_env_id += 1
+                env_id = f"e{next_env_id}"
+                env_ids[id(env)] = env_id
+            if env_id in env_in_progress or env_id in env_done:
+                return {"t": "ENV", "id": env_id, "ref": True}
+            env_in_progress.add(env_id)
+            payload = {
+                "values": {name: ser_val(val) for name, val in env.values.items()},
+                "declared": dict(env.declared),
+                "frozen": list(env.frozen),
+                "permafrozen": list(env.permafrozen),
+                "parent": ser_env(env.parent),
+            }
+            env_in_progress.remove(env_id)
+            env_done.add(env_id)
+            return {"t": "ENV", "id": env_id, "def": payload}
+
         def ser_val(v: Value) -> Any:
+            if isinstance(v.value, PointerRef):
+                ptr = v.value
+                return {
+                    "t": "PTR",
+                    "name": ptr.name,
+                    "env": ser_env(ptr.env),
+                    "value_type": v.type,
+                }
             t = v.type
             if t == TYPE_INT:
                 assert isinstance(v.value, int)
@@ -2748,7 +2944,61 @@ class Builtins:
                         raise ASMRuntimeError("SER: unsupported map key type", location=location, rewrite_rule="SER")
                     items.append({"k": key_ser, "v": ser_val(vv)})
                 return {"t": "MAP", "v": items}
-            # For FUNC and THR and other values, emit a descriptive form.
+            if t == TYPE_FUNC:
+                fn = v.value
+                assert isinstance(fn, Function)
+                func_id = interpreter._ser_func_ids.get(id(fn))
+                if func_id is None:
+                    interpreter._ser_func_counter += 1
+                    func_id = f"f{interpreter._ser_func_counter}"
+                    interpreter._ser_func_ids[id(fn)] = func_id
+                    interpreter._ser_func_registry[func_id] = fn
+                if func_id in func_in_progress:
+                    return {"t": "FUNC", "id": func_id, "ref": True}
+                func_in_progress.add(func_id)
+                params = []
+                for p in fn.params:
+                    params.append({
+                        "name": p.name,
+                        "type": p.type,
+                        "default": ser_ast(p.default),
+                    })
+                payload = {
+                    "name": fn.name,
+                    "return": fn.return_type,
+                    "params": params,
+                    "body": ser_ast(fn.body),
+                    "closure": ser_env(fn.closure),
+                }
+                func_in_progress.remove(func_id)
+                return {
+                    "t": "FUNC",
+                    "id": func_id,
+                    "name": fn.name,
+                    "return": fn.return_type,
+                    "params": params,
+                    "def": payload,
+                }
+            if t == TYPE_THR:
+                ctrl = v.value
+                assert isinstance(ctrl, dict)
+                thr_id = interpreter._ser_thr_ids.get(id(ctrl))
+                if thr_id is None:
+                    interpreter._ser_thr_counter += 1
+                    thr_id = f"t{interpreter._ser_thr_counter}"
+                    interpreter._ser_thr_ids[id(ctrl)] = thr_id
+                    interpreter._ser_thr_registry[thr_id] = ctrl
+                return {
+                    "t": "THR",
+                    "id": thr_id,
+                    "state": ctrl.get("state", "finished"),
+                    "paused": bool(ctrl.get("paused")),
+                    "finished": bool(ctrl.get("finished")),
+                    "stop": bool(ctrl.get("stop")),
+                    "env": ser_env(ctrl.get("env")),
+                    "block": ser_ast(ctrl.get("block")),
+                }
+            # For other values, emit a descriptive form.
             return {"t": t, "repr": str(v.value)}
 
         try:
@@ -2774,10 +3024,283 @@ class Builtins:
         s = args[0]
         text = self._expect_str(s, "UNSER", location)
 
+        env_registry: Dict[str, Environment] = {}
+
+        def deser_loc(obj: Any) -> SourceLocation:
+            if not isinstance(obj, dict):
+                return SourceLocation(file="<unser>", line=1, column=1, statement="")
+            file_val = obj.get("file")
+            line_val = obj.get("line")
+            column_val = obj.get("column")
+            statement_val = obj.get("statement")
+            file = file_val if isinstance(file_val, str) else "<unser>"
+            line = line_val if isinstance(line_val, int) else 1
+            column = column_val if isinstance(column_val, int) else 1
+            statement = statement_val if isinstance(statement_val, str) else ""
+            return SourceLocation(file=file, line=line, column=column, statement=statement)
+
+        def deser_ast(obj: Any) -> Any:
+            if obj is None:
+                return None
+            if not isinstance(obj, dict) or "n" not in obj:
+                raise ASMRuntimeError("UNSER: invalid AST form", location=location, rewrite_rule="UNSER")
+            n = obj.get("n")
+            if n == "Program":
+                loc = deser_loc(obj.get("loc"))
+                stmts = [deser_ast(s) for s in obj.get("statements", [])]
+                return Program(location=loc, statements=cast(List[Statement], stmts))
+            if n == "Block":
+                loc = deser_loc(obj.get("loc"))
+                stmts = [deser_ast(s) for s in obj.get("statements", [])]
+                return Block(location=loc, statements=cast(List[Statement], stmts))
+            if n == "Assignment":
+                loc = deser_loc(obj.get("loc"))
+                return Assignment(
+                    location=loc,
+                    target=str(obj.get("target", "")),
+                    declared_type=obj.get("declared_type") if isinstance(obj.get("declared_type"), str) else None,
+                    expression=cast(Expression, deser_ast(obj.get("expression"))),
+                )
+            if n == "Declaration":
+                loc = deser_loc(obj.get("loc"))
+                return Declaration(
+                    location=loc,
+                    name=str(obj.get("name", "")),
+                    declared_type=str(obj.get("declared_type", "")),
+                )
+            if n == "ExpressionStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ExpressionStatement(location=loc, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "IfBranch":
+                return IfBranch(
+                    condition=cast(Expression, deser_ast(obj.get("condition"))),
+                    block=cast(Block, deser_ast(obj.get("block"))),
+                )
+            if n == "IfStatement":
+                loc = deser_loc(obj.get("loc"))
+                return IfStatement(
+                    location=loc,
+                    condition=cast(Expression, deser_ast(obj.get("condition"))),
+                    then_block=cast(Block, deser_ast(obj.get("then_block"))),
+                    elifs=cast(List[IfBranch], [deser_ast(b) for b in obj.get("elifs", [])]),
+                    else_block=cast(Optional[Block], deser_ast(obj.get("else_block"))),
+                )
+            if n == "WhileStatement":
+                loc = deser_loc(obj.get("loc"))
+                return WhileStatement(
+                    location=loc,
+                    condition=cast(Expression, deser_ast(obj.get("condition"))),
+                    block=cast(Block, deser_ast(obj.get("block"))),
+                )
+            if n == "ForStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ForStatement(
+                    location=loc,
+                    counter=str(obj.get("counter", "")),
+                    target_expr=cast(Expression, deser_ast(obj.get("target_expr"))),
+                    block=cast(Block, deser_ast(obj.get("block"))),
+                )
+            if n == "ParForStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ParForStatement(
+                    location=loc,
+                    counter=str(obj.get("counter", "")),
+                    target_expr=cast(Expression, deser_ast(obj.get("target_expr"))),
+                    block=cast(Block, deser_ast(obj.get("block"))),
+                )
+            if n == "FuncDef":
+                loc = deser_loc(obj.get("loc"))
+                params = [deser_ast(p) for p in obj.get("params", [])]
+                return FuncDef(
+                    location=loc,
+                    name=str(obj.get("name", "")),
+                    params=cast(List[Param], params),
+                    return_type=str(obj.get("return_type", "")),
+                    body=cast(Block, deser_ast(obj.get("body"))),
+                )
+            if n == "LambdaExpression":
+                loc = deser_loc(obj.get("loc"))
+                params = [deser_ast(p) for p in obj.get("params", [])]
+                return LambdaExpression(
+                    location=loc,
+                    params=cast(List[Param], params),
+                    return_type=str(obj.get("return_type", "")),
+                    body=cast(Block, deser_ast(obj.get("body"))),
+                )
+            if n == "Param":
+                return Param(
+                    type=str(obj.get("type", "")),
+                    name=str(obj.get("name", "")),
+                    default=cast(Optional[Expression], deser_ast(obj.get("default"))),
+                )
+            if n == "ReturnStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ReturnStatement(location=loc, expression=cast(Optional[Expression], deser_ast(obj.get("expression"))))
+            if n == "PopStatement":
+                loc = deser_loc(obj.get("loc"))
+                return PopStatement(location=loc, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "BreakStatement":
+                loc = deser_loc(obj.get("loc"))
+                return BreakStatement(location=loc, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "GotoStatement":
+                loc = deser_loc(obj.get("loc"))
+                return GotoStatement(location=loc, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "GotopointStatement":
+                loc = deser_loc(obj.get("loc"))
+                return GotopointStatement(location=loc, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "ContinueStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ContinueStatement(location=loc)
+            if n == "AsyncStatement":
+                loc = deser_loc(obj.get("loc"))
+                return AsyncStatement(location=loc, block=cast(Block, deser_ast(obj.get("block"))))
+            if n == "ThrStatement":
+                loc = deser_loc(obj.get("loc"))
+                return ThrStatement(location=loc, symbol=str(obj.get("symbol", "")), block=cast(Block, deser_ast(obj.get("block"))))
+            if n == "TryStatement":
+                loc = deser_loc(obj.get("loc"))
+                return TryStatement(
+                    location=loc,
+                    try_block=cast(Block, deser_ast(obj.get("try_block"))),
+                    catch_symbol=obj.get("catch_symbol") if isinstance(obj.get("catch_symbol"), str) else None,
+                    catch_block=cast(Block, deser_ast(obj.get("catch_block"))),
+                )
+            if n == "Literal":
+                loc = deser_loc(obj.get("loc"))
+                raw = obj.get("value")
+                lit_type = str(obj.get("literal_type", "INT")).upper()
+                # Ensure we always pass an int/float/str to Literal.value
+                value: Union[int, float, str]
+                if raw is None:
+                    if lit_type == "INT":
+                        value = 0
+                    elif lit_type == "FLT":
+                        value = 0.0
+                    else:
+                        value = ""
+                else:
+                    if lit_type == "INT":
+                        try:
+                            value = int(raw)
+                        except Exception:
+                            value = 0
+                    elif lit_type == "FLT":
+                        try:
+                            value = float(raw)
+                        except Exception:
+                            value = 0.0
+                    else:
+                        value = str(raw)
+                # Normalize literal_type to a known token
+                lit_type = lit_type if lit_type in ("INT", "FLT", "STR") else "INT"
+                return Literal(location=loc, value=value, literal_type=lit_type)
+            if n == "TensorLiteral":
+                loc = deser_loc(obj.get("loc"))
+                items = [deser_ast(x) for x in obj.get("items", [])]
+                return TensorLiteral(location=loc, items=cast(List[Expression], items))
+            if n == "MapLiteral":
+                loc = deser_loc(obj.get("loc"))
+                items = []
+                raw_items = obj.get("items", [])
+                if isinstance(raw_items, list):
+                    for pair in raw_items:
+                        if isinstance(pair, dict):
+                            items.append((deser_ast(pair.get("k")), deser_ast(pair.get("v"))))
+                return MapLiteral(location=loc, items=cast(List[Tuple[Expression, Expression]], items))
+            if n == "AsyncExpression":
+                loc = deser_loc(obj.get("loc"))
+                return AsyncExpression(location=loc, block=cast(Block, deser_ast(obj.get("block"))))
+            if n == "IndexExpression":
+                loc = deser_loc(obj.get("loc"))
+                indices = [deser_ast(x) for x in obj.get("indices", [])]
+                return IndexExpression(
+                    location=loc,
+                    base=cast(Expression, deser_ast(obj.get("base"))),
+                    indices=cast(List[Expression], indices),
+                    is_map=bool(obj.get("is_map")),
+                )
+            if n == "Range":
+                loc = deser_loc(obj.get("loc"))
+                return Range(location=loc, lo=cast(Expression, deser_ast(obj.get("lo"))), hi=cast(Expression, deser_ast(obj.get("hi"))))
+            if n == "Star":
+                loc = deser_loc(obj.get("loc"))
+                return Star(location=loc)
+            if n == "Identifier":
+                loc = deser_loc(obj.get("loc"))
+                return Identifier(location=loc, name=str(obj.get("name", "")))
+            if n == "PointerExpression":
+                loc = deser_loc(obj.get("loc"))
+                return PointerExpression(location=loc, target=str(obj.get("target", "")))
+            if n == "TypedTarget":
+                loc = deser_loc(obj.get("loc"))
+                return TypedTarget(location=loc, declared_type=str(obj.get("declared_type", "")), target=cast(Expression, deser_ast(obj.get("target"))))
+            if n == "CallExpression":
+                loc = deser_loc(obj.get("loc"))
+                args = [deser_ast(a) for a in obj.get("args", [])]
+                return CallExpression(
+                    location=loc,
+                    callee=cast(Expression, deser_ast(obj.get("callee"))),
+                    args=cast(List[CallArgument], args),
+                )
+            if n == "CallArgument":
+                return CallArgument(name=obj.get("name") if isinstance(obj.get("name"), str) else None, expression=cast(Expression, deser_ast(obj.get("expression"))))
+            if n == "TensorSetStatement":
+                loc = deser_loc(obj.get("loc"))
+                return TensorSetStatement(
+                    location=loc,
+                    target=cast(IndexExpression, deser_ast(obj.get("target"))),
+                    value=cast(Expression, deser_ast(obj.get("value"))),
+                )
+            raise ASMRuntimeError("UNSER: unknown AST node", location=location, rewrite_rule="UNSER")
+
+        def deser_env(obj: Any) -> Optional[Environment]:
+            if obj is None:
+                return None
+            if not isinstance(obj, dict) or obj.get("t") != "ENV":
+                raise ASMRuntimeError("UNSER: invalid ENV", location=location, rewrite_rule="UNSER")
+            env_id = obj.get("id")
+            if not isinstance(env_id, str):
+                raise ASMRuntimeError("UNSER: invalid ENV id", location=location, rewrite_rule="UNSER")
+            existing_env = env_registry.get(env_id)
+            if existing_env is not None:
+                return existing_env
+            env = Environment()
+            env_registry[env_id] = env
+            if obj.get("ref"):
+                return env
+            defn = obj.get("def")
+            if isinstance(defn, dict):
+                env.parent = deser_env(defn.get("parent"))
+                raw_values = defn.get("values", {})
+                if isinstance(raw_values, dict):
+                    for name, val_obj in raw_values.items():
+                        if isinstance(name, str):
+                            env.values[name] = deser_val(val_obj)
+                raw_declared = defn.get("declared", {})
+                if isinstance(raw_declared, dict):
+                    env.declared = {k: v for k, v in raw_declared.items() if isinstance(k, str) and isinstance(v, str)}
+                raw_frozen = defn.get("frozen", [])
+                if isinstance(raw_frozen, list):
+                    env.frozen = set(x for x in raw_frozen if isinstance(x, str))
+                raw_perma = defn.get("permafrozen", [])
+                if isinstance(raw_perma, list):
+                    env.permafrozen = set(x for x in raw_perma if isinstance(x, str))
+            return env
+
         def deser_val(obj) -> Value:
             if not isinstance(obj, dict) or "t" not in obj:
                 raise ASMRuntimeError("UNSER: invalid serialized form", location=location, rewrite_rule="UNSER")
             t = obj["t"]
+            if t == "PTR":
+                name = obj.get("name")
+                env_obj = obj.get("env")
+                value_type = obj.get("value_type")
+                if not isinstance(name, str) or not isinstance(value_type, str):
+                    raise ASMRuntimeError("UNSER: invalid PTR", location=location, rewrite_rule="UNSER")
+                env = deser_env(env_obj)
+                if env is None:
+                    raise ASMRuntimeError("UNSER: invalid PTR env", location=location, rewrite_rule="UNSER")
+                return Value(value_type, PointerRef(env=env, name=name))
             if t == "INT":
                 raw = obj.get("v", "0")
                 neg = False
@@ -2808,36 +3331,178 @@ class Builtins:
                 vals = [deser_val(x) for x in flat]
                 arr = np.array(vals, dtype=object)
                 return Value(TYPE_TNS, Tensor(shape=list(shape), data=arr))
+
             if t == "MAP":
-                items = obj.get("v", [])
-                if not isinstance(items, list):
-                    raise ASMRuntimeError("UNSER: invalid MAP body", location=location, rewrite_rule="UNSER")
+                raw_items = obj.get("v", [])
+                if not isinstance(raw_items, list):
+                    raise ASMRuntimeError("UNSER: invalid MAP form", location=location, rewrite_rule="UNSER")
                 m = Map()
-                for pair in items:
-                    key_obj = pair.get("k")
-                    val_obj = pair.get("v")
-                    if not isinstance(key_obj, dict) or "t" not in key_obj:
-                        raise ASMRuntimeError("UNSER: invalid MAP key", location=location, rewrite_rule="UNSER")
-                    kt = key_obj["t"]
-                    if kt == "INT":
-                        raw = key_obj.get("v", "0")
-                        neg = False
-                        if isinstance(raw, str) and raw.startswith("-"):
-                            neg = True
-                            raw = raw[1:]
-                        kval: Any = int(raw, 2) if raw != "" else 0
-                        if neg:
-                            kval = -kval
-                    elif kt == "FLT":
-                        kval = float(key_obj.get("v", 0.0))
-                    elif kt == "STR":
-                        kval = key_obj.get("v", "")
-                    else:
-                        raise ASMRuntimeError("UNSER: unsupported MAP key type", location=location, rewrite_rule="UNSER")
-                    vval = deser_val(val_obj)
-                    m.data[(kt, kval)] = vval
+                for pair in raw_items:
+                    if not isinstance(pair, dict):
+                        continue
+                    kobj = pair.get("k")
+                    vobj = pair.get("v")
+                    # Key must deserialize to INT/FLT/STR
+                    key_val = deser_val(kobj)
+                    if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                        raise ASMRuntimeError("UNSER: invalid MAP key type", location=location, rewrite_rule="UNSER")
+                    key = (key_val.type, key_val.value)
+                    val = deser_val(vobj)
+                    m.data[key] = val
                 return Value(TYPE_MAP, m)
-            # FUNC / THR cannot be reconstructed reliably
+
+            if t == "FUNC":
+                func_id = obj.get("id")
+                if isinstance(func_id, str):
+                    existing = interpreter._ser_func_registry.get(func_id)
+                    if existing is not None:
+                        return Value(TYPE_FUNC, existing)
+
+                func_def = obj.get("def")
+                # If we have a full definition, reconstruct a placeholder and fill it
+                if isinstance(func_def, dict):
+                    def_name = func_def.get("name") if isinstance(func_def.get("name"), str) else obj.get("name")
+                    fn_name = def_name if isinstance(def_name, str) else "<unser_func>"
+                    raw_return = func_def.get("return") if isinstance(func_def.get("return"), str) else obj.get("return")
+                    return_type = raw_return if isinstance(raw_return, str) else TYPE_INT
+                    raw_params = func_def.get("params", [])
+                    params_def: List[Param] = []
+
+                    def _build_default_expr(raw_default) -> Optional[Expression]:
+                        if raw_default is None:
+                            return None
+                        if isinstance(raw_default, dict) and "n" in raw_default:
+                            node = deser_ast(raw_default)
+                            return node if isinstance(node, Expression) else None
+                        try:
+                            val = deser_val(raw_default)
+                        except ASMRuntimeError:
+                            return None
+                        if val.type in (TYPE_INT, TYPE_FLT, TYPE_STR):
+                            return Literal(location=SourceLocation(file="<unser>", line=1, column=1, statement=""), value=val.value, literal_type=val.type)
+                        return None
+
+                    if isinstance(raw_params, list):
+                        for item in raw_params:
+                            if not isinstance(item, dict):
+                                continue
+                            p_name = item.get("name")
+                            p_type = item.get("type")
+                            if not isinstance(p_name, str) or not isinstance(p_type, str):
+                                continue
+                            default_expr = _build_default_expr(item.get("default"))
+                            params_def.append(Param(type=p_type, name=p_name, default=default_expr))
+
+                    dummy_block = Block(location=SourceLocation(file="<unser>", line=1, column=1, statement=""), statements=[])
+                    placeholder = Function(name=fn_name, params=params_def, return_type=return_type, body=dummy_block, closure=Environment())
+                    if isinstance(func_id, str):
+                        interpreter._ser_func_registry[func_id] = placeholder
+                        interpreter._ser_func_ids[id(placeholder)] = func_id
+
+                    try:
+                        body_node = deser_ast(func_def.get("body"))
+                        if isinstance(body_node, Block):
+                            placeholder.body = body_node
+                    except ASMRuntimeError:
+                        pass
+                    try:
+                        closure_env = deser_env(func_def.get("closure"))
+                        if closure_env is not None:
+                            placeholder.closure = closure_env
+                    except ASMRuntimeError:
+                        pass
+                    return Value(TYPE_FUNC, placeholder)
+
+                # If function name matches a builtin function in this interpreter, return it
+                name = obj.get("name")
+                if isinstance(name, str) and name in interpreter.functions:
+                    fn = interpreter.functions[name]
+                    if isinstance(func_id, str):
+                        interpreter._ser_func_registry[func_id] = fn
+                        interpreter._ser_func_ids[id(fn)] = func_id
+                    return Value(TYPE_FUNC, fn)
+
+                # Fallback: create a placeholder that throws when invoked
+                loc = SourceLocation(file="<unser>", line=1, column=1, statement="")
+                params_fallback: List[Param] = []
+                raw_params = obj.get("params", [])
+                if isinstance(raw_params, list):
+                    for item in raw_params:
+                        if not isinstance(item, dict):
+                            continue
+                        p_name = item.get("name")
+                        p_type = item.get("type")
+                        if not isinstance(p_name, str) or not isinstance(p_type, str):
+                            continue
+                        default_expr = None
+                        if item.get("default") is not None:
+                            raw_def = item.get("default")
+                            if isinstance(raw_def, dict) and "n" in raw_def:
+                                try:
+                                    default_expr = deser_ast(raw_def)
+                                except ASMRuntimeError:
+                                    default_expr = None
+                        params_fallback.append(Param(type=p_type, name=p_name, default=default_expr))
+
+                raw_return = obj.get("return")
+                return_type = raw_return if isinstance(raw_return, str) else TYPE_INT
+                fn_name = name if isinstance(name, str) else "<unser_func>"
+                msg = f"UNSER: function '{fn_name}' not available"
+                throw_ident = Identifier(location=loc, name="THROW")
+                call_expr = CallExpression(
+                    location=loc,
+                    callee=throw_ident,
+                    args=[CallArgument(name=None, expression=Literal(location=loc, value=msg, literal_type=TYPE_STR))],
+                )
+                throw_block = Block(location=loc, statements=[ExpressionStatement(location=loc, expression=call_expr)])
+                placeholder = Function(name=fn_name, params=params_fallback, return_type=return_type, body=throw_block, closure=Environment())
+                if isinstance(func_id, str):
+                    interpreter._ser_func_registry[func_id] = placeholder
+                    interpreter._ser_func_ids[id(placeholder)] = func_id
+                return Value(TYPE_FUNC, placeholder)
+            if t == "THR":
+                thr_id = obj.get("id")
+                if isinstance(thr_id, str):
+                    existing_thr = interpreter._ser_thr_registry.get(thr_id)
+                    if existing_thr is not None:
+                        return Value(TYPE_THR, existing_thr)
+
+                class _DummyThread:
+                    def join(self, *_args, **_kwargs) -> None:
+                        return None
+
+                paused = bool(obj.get("paused"))
+                finished = bool(obj.get("finished"))
+                stop = bool(obj.get("stop"))
+                state_raw = obj.get("state")
+                state = state_raw if isinstance(state_raw, str) else ("finished" if finished else "running")
+                block: Optional[Block] = None
+                env_val: Optional[Environment] = None
+                try:
+                    block = deser_ast(obj.get("block"))
+                except ASMRuntimeError:
+                    block = None
+                try:
+                    env_val = deser_env(obj.get("env"))
+                except ASMRuntimeError:
+                    env_val = None
+                ctrl = {
+                    "thread": _DummyThread(),
+                    "paused": paused,
+                    "pause_event": threading.Event(),
+                    "finished": finished,
+                    "stop": stop,
+                    "state": state,
+                    "env": env_val,
+                    "block": block if isinstance(block, Block) else None,
+                }
+                if not paused:
+                    cast(threading.Event, ctrl["pause_event"]).set()
+                if isinstance(thr_id, str):
+                    interpreter._ser_thr_registry[thr_id] = ctrl
+                    interpreter._ser_thr_ids[id(ctrl)] = thr_id
+                return Value(TYPE_THR, ctrl)
+            # Unknown type: cannot reconstruct
             raise ASMRuntimeError(f"UNSER: cannot reconstruct type {t}", location=location, rewrite_rule="UNSER")
 
         try:
@@ -4170,6 +4835,14 @@ class Interpreter:
         # worker until the enclosing call expression completes so that
         # operators like PAUSE/STOP can act on the returned THR before it runs.
         self._pending_async_starts: List[Dict[str, Any]] = []
+        # SER/UNSER registries for FUNC and THR handles (best-effort round-trip
+        # within a running interpreter instance).
+        self._ser_func_registry: Dict[str, Function] = {}
+        self._ser_thr_registry: Dict[str, Dict[str, Any]] = {}
+        self._ser_func_ids: Dict[int, str] = {}
+        self._ser_thr_ids: Dict[int, str] = {}
+        self._ser_func_counter = 0
+        self._ser_thr_counter = 0
 
         # Install built-in types (INT/STR/TNS) into the registry with their
         # concrete runtime behavior. These names are reserved by default

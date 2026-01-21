@@ -548,9 +548,20 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
 - `SIGNATURE(SYMBOL: sym):STR` ; returns a textual signature for the identifier `sym`. If `sym` denotes a user-defined function (`FUNC`) the result is formatted in the canonical form used in this specification, e.g. `FUNC name(T1: arg1, T2: arg2 = default):R`. For other bound symbols the result is `TYPE: symbol` (for example `INT: x`). The argument must be a plain identifier.
 
-- `SER(INT|FLT|STR|TNS|MAP: obj):STR` ; return a `STR` containing a compact JSON representation of `obj` that encodes runtime type information. Encoding rules (summary): `INT` values are encoded as binary-digit strings (with a leading `-` for negatives), `FLT` values as decimal text via `repr()`, `STR` values as raw strings, `TNS` values as an object with `shape` (list of `INT` lengths) and a flat list of serialized elements, and `MAP` values as a list of key/value entries where keys are encoded with their native type (`INT`, `FLT`, or `STR`) and values are recursively serialized. `FUNC` and `THR` values are represented by a descriptive form but cannot be reliably reconstructed by `UNSER`.
+- `SER(INT|FLT|STR|TNS|MAP|FUNC|THR: obj):STR` ; return a `STR` containing a compact JSON representation of `obj` that encodes runtime type information. Encoding rules (summary): `INT` values are encoded as binary-digit strings (with a leading `-` for negatives), `FLT` values as decimal text via `repr()`, `STR` values as raw strings, `TNS` values as an object with `shape` (list of `INT` lengths) and a flat list of serialized elements, and `MAP` values as a list of key/value entries where keys are encoded with their native type (`INT`, `FLT`, or `STR`) and values are recursively serialized.
 
-- `UNSER(STR: obj):INT|FLT|STR|TNS|MAP` ; reverse of `SER`. Given a string produced by `SER`, reconstruct the original runtime value for `INT`, `FLT`, `STR`, `TNS`, and `MAP` values. If the encoded value is a `FUNC` or `THR` (or the input is otherwise invalid), `UNSER` raises a runtime error.
+  `FUNC` and `THR` values are serialized with enough information to reconstruct them in a new interpreter process:
+
+  - `FUNC` values include an identifier, name, parameter list (including default expressions), return type, the function body AST, and a serialized snapshot of the closure environment. The closure snapshot serializes each bound value via `SER` so that the function can be rehydrated elsewhere.
+  - `THR` values include an identifier plus status metadata (paused/finished/stop/state) and, when available, the serialized block AST and environment captured when the thread was created. The underlying OS thread is not serialized.
+
+- `UNSER(STR: obj):INT|FLT|STR|TNS|MAP|FUNC|THR` ; reverse of `SER`. Given a string produced by `SER`, reconstruct the runtime value.
+
+  - For `INT`, `FLT`, `STR`, `TNS`, and `MAP`, reconstruction is exact.
+  - For `FUNC`, the interpreter rebuilds the function body and closure environment from the serialized definition so the function can be called in a fresh process.
+  - For `THR`, the interpreter reconstructs a `THR` handle with the recorded metadata. The handle is inert: it does not resume the original background task, but supports `TYPE`, `PAUSED`, `STOP`, and `AWAIT` (which returns immediately).
+
+  If the input is not a valid serialization produced by `SER`, `UNSER` raises a runtime error.
 
 - `COPY(ANY: obj):ANY` ; return a shallow copy of `obj`. For `INT`, `FLT`, `STR`, and `FUNC` this produces a same-typed value wrapper. For `TNS` it returns a newly-allocated tensor with the same shape whose elements reference the original element values (shallow). For `MAP` it returns a new map with the same keys and the same value references (shallow).
 
