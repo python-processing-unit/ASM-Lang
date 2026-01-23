@@ -20,9 +20,9 @@ FUNC MEAN(TNS: values):FLT{
     IF(EQ(n, 0)) { THROW("empty input") }
     FLT: sum = 0.0
     FOR(i, n){
-        ADD(@sum, FLT(values[i]))
+        FADD(@sum, values[i])
     }
-    RETURN(DIV(sum, FLT(n)))
+    RETURN(FDIV(sum, n))
 }
 
 FUNC MEDIAN(TNS: values):FLT{
@@ -114,9 +114,9 @@ FUNC HMEAN(TNS: values):FLT{
     IF(EQ(n, 0)) { THROW("empty input") }
     FLT: denom = 0.0
     FOR(i, n){
-        ADD(@denom, DIV(1.0, FLT(values[i])))
+        ADD(@denom, FDIV(1.0, values[i]))
     }
-    RETURN(DIV(FLT(n), denom))
+    RETURN(FDIV(n, denom))
 }
 
 FUNC QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT{
@@ -149,14 +149,14 @@ FUNC VARIANCE(TNS: values, INT: sample = 0):FLT{
     FLT: mean = MEAN(values)
     FLT: var_sum = 0.0
     FOR(i, n){
-        FLT: diff = SUB(FLT(values[i]), mean)
+        FLT: diff = FSUB(values[i], mean)
         ADD(@var_sum, MUL(diff, diff))
     }
     INT: denom = SUB(n, sample)
     # Tests expect integer-division semantics (truncation) for variance
-    FLT: raw = DIV(var_sum, FLT(denom))
-    INT: truncated = INT(raw)
-    RETURN(FLT(truncated))
+    FLT: raw = FDIV(var_sum, denom)
+    FLT: truncated = FLT(INT(raw))
+    RETURN(truncated)
 }
 
 FUNC STDEV(TNS: values, INT: sample = 0):FLT{
@@ -188,8 +188,8 @@ FUNC HISTOGRAM(TNS: values, INT: bins):TNS{
     # width denominator: (mx - mn + 1) to ensure max maps to last bin
     FLT: den = ADD(SUB(mx, mn), 1.0)
     FOR(i, n){
-        FLT: offset = SUB(FLT(values[i]), mn)
-        FLT: ratio = DIV(MUL(offset, FLT(bins)), den)
+        FLT: offset = FSUB(values[i], mn)
+        FLT: ratio = FDIV(FMUL(offset, bins), den)
         INT: bin = INT(ratio)
         # bin ranges 0..bins-1 -> store at 1-based index
         INT: bi = ADD(bin, 1)

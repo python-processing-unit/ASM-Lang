@@ -468,13 +468,25 @@ class Builtins:
     def __init__(self) -> None:
         self.table: Dict[str, BuiltinFunction] = {}
         self._register_custom("ADD", 2, 2, self._add)
+        self._register_custom("IADD", 2, 2, self._iadd)
+        self._register_custom("FADD", 2, 2, self._fadd)
         self._register_custom("SUB", 2, 2, self._sub)
+        self._register_custom("ISUB", 2, 2, self._isub)
+        self._register_custom("FSUB", 2, 2, self._fsub)
         self._register_custom("MUL", 2, 2, self._mul)
+        self._register_custom("IMUL", 2, 2, self._imul)
+        self._register_custom("FMUL", 2, 2, self._fmul)
         self._register_custom("DIV", 2, 2, self._div)
+        self._register_custom("IDIV", 2, 2, self._idiv)
+        self._register_custom("FDIV", 2, 2, self._fdiv)
         self._register_int_only("CDIV", 2, self._safe_cdiv)
         self._register_custom("MOD", 2, 2, self._mod)
         self._register_custom("POW", 2, 2, self._pow)
+        self._register_custom("IPOW", 2, 2, self._ipow)
+        self._register_custom("FPOW", 2, 2, self._fpow)
         self._register_custom("ROOT", 2, 2, self._root)
+        self._register_custom("IROOT", 2, 2, self._iroot)
+        self._register_custom("FROOT", 2, 2, self._froot)
         self._register_custom("NEG", 1, 1, self._neg)
         self._register_custom("ABS", 1, 1, self._abs)
         self._register_custom("GCD", 2, 2, self._gcd)
@@ -499,7 +511,11 @@ class Builtins:
         self._register_custom("GTE", 2, 2, self._gte)
         self._register_custom("LTE", 2, 2, self._lte)
         self._register_variadic("SUM", 1, self._sum)
+        self._register_variadic("ISUM", 1, self._isum)
+        self._register_variadic("FSUM", 1, self._fsum)
         self._register_variadic("PROD", 1, self._prod)
+        self._register_variadic("IPROD", 1, self._iprod)
+        self._register_variadic("FPROD", 1, self._fprod)
         self._register_variadic("MAX", 1, self._max)
         self._register_variadic("MIN", 1, self._min)
         self._register_variadic("ANY", 1, self._any)
@@ -697,17 +713,118 @@ class Builtins:
             return TYPE_FLT, self._expect_flt(a, rule, location)
         raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
 
+    def _coerce_int(self, value: Value, rule: str, location: SourceLocation) -> int:
+        value = self._deref_pointer(value, rule=rule, location=location)
+        if value.type == TYPE_INT:
+            assert isinstance(value.value, int)
+            return value.value
+        if value.type == TYPE_FLT:
+            assert isinstance(value.value, float)
+            return int(value.value)
+        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+
+    def _coerce_flt(self, value: Value, rule: str, location: SourceLocation) -> float:
+        value = self._deref_pointer(value, rule=rule, location=location)
+        if value.type == TYPE_FLT:
+            assert isinstance(value.value, float)
+            return value.value
+        if value.type == TYPE_INT:
+            assert isinstance(value.value, int)
+            return float(value.value)
+        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+
+    def _root_numeric(self, t: str, x: Any, n: Any, *, rule: str, location: SourceLocation) -> Value:
+        # Common checks
+        if (t == TYPE_INT and n == 0) or (t == TYPE_FLT and n == 0.0):
+            raise ASMRuntimeError(f"{rule} exponent must be non-zero", rewrite_rule=rule, location=location)
+
+        if t == TYPE_INT:
+            if n < 0:
+                if x == 0:
+                    raise ASMRuntimeError("Division by zero", rewrite_rule=rule, location=location)
+                if abs(x) != 1:
+                    raise ASMRuntimeError(f"Negative {rule} exponent yields non-integer result", rewrite_rule=rule, location=location)
+                return Value(TYPE_INT, x)
+
+            k = n
+            if k == 1:
+                return Value(TYPE_INT, x)
+            if x >= 0:
+                lo = 0
+                hi = 1
+                while pow(hi, k) <= x:
+                    hi <<= 1
+                while lo + 1 < hi:
+                    mid = (lo + hi) // 2
+                    if pow(mid, k) <= x:
+                        lo = mid
+                    else:
+                        hi = mid
+                return Value(TYPE_INT, lo)
+            if k % 2 == 0:
+                raise ASMRuntimeError("Even root of negative integer", rewrite_rule=rule, location=location)
+            ax = -x
+            lo = 0
+            hi = 1
+            while pow(hi, k) <= ax:
+                hi <<= 1
+            while lo + 1 < hi:
+                mid = (lo + hi) // 2
+                if pow(mid, k) <= ax:
+                    lo = mid
+                else:
+                    hi = mid
+            return Value(TYPE_INT, -lo)
+
+        if x == 0.0 and n < 0.0:
+            raise ASMRuntimeError("Division by zero", rewrite_rule=rule, location=location)
+        if x < 0.0:
+            if not float(n).is_integer() or int(n) % 2 == 0:
+                raise ASMRuntimeError(f"{rule} of negative float requires odd integer root", rewrite_rule=rule, location=location)
+            return Value(TYPE_FLT, -1.0 * pow(abs(x), 1.0 / n))
+        return Value(TYPE_FLT, pow(x, 1.0 / n))
+
     def _add(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, a, b = self._expect_num_pair(args, "ADD", location)
         return Value(t, a + b)
+
+    def _iadd(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_int(args[0], "IADD", location)
+        b = self._coerce_int(args[1], "IADD", location)
+        return Value(TYPE_INT, a + b)
+
+    def _fadd(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_flt(args[0], "FADD", location)
+        b = self._coerce_flt(args[1], "FADD", location)
+        return Value(TYPE_FLT, a + b)
 
     def _sub(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, a, b = self._expect_num_pair(args, "SUB", location)
         return Value(t, a - b)
 
+    def _isub(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_int(args[0], "ISUB", location)
+        b = self._coerce_int(args[1], "ISUB", location)
+        return Value(TYPE_INT, a - b)
+
+    def _fsub(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_flt(args[0], "FSUB", location)
+        b = self._coerce_flt(args[1], "FSUB", location)
+        return Value(TYPE_FLT, a - b)
+
     def _mul(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, a, b = self._expect_num_pair(args, "MUL", location)
         return Value(t, a * b)
+
+    def _imul(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_int(args[0], "IMUL", location)
+        b = self._coerce_int(args[1], "IMUL", location)
+        return Value(TYPE_INT, a * b)
+
+    def _fmul(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_flt(args[0], "FMUL", location)
+        b = self._coerce_flt(args[1], "FMUL", location)
+        return Value(TYPE_FLT, a * b)
 
     def _div(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, a, b = self._expect_num_pair(args, "DIV", location)
@@ -715,6 +832,20 @@ class Builtins:
             return Value(TYPE_INT, self._safe_div(a, b))
         if b == 0.0:
             raise ASMRuntimeError("Division by zero", rewrite_rule="DIV", location=location)
+        return Value(TYPE_FLT, a / b)
+
+    def _idiv(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_int(args[0], "IDIV", location)
+        b = self._coerce_int(args[1], "IDIV", location)
+        if b == 0:
+            raise ASMRuntimeError("Division by zero", rewrite_rule="IDIV", location=location)
+        return Value(TYPE_INT, a // b)
+
+    def _fdiv(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_flt(args[0], "FDIV", location)
+        b = self._coerce_flt(args[1], "FDIV", location)
+        if b == 0.0:
+            raise ASMRuntimeError("Division by zero", rewrite_rule="FDIV", location=location)
         return Value(TYPE_FLT, a / b)
 
     def _mod(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -731,70 +862,31 @@ class Builtins:
             return Value(TYPE_INT, self._safe_pow(a, b))
         return Value(TYPE_FLT, pow(a, b))
 
+    def _ipow(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_int(args[0], "IPOW", location)
+        b = self._coerce_int(args[1], "IPOW", location)
+        if b < 0:
+            raise ASMRuntimeError("Negative exponent not supported", rewrite_rule="IPOW", location=location)
+        return Value(TYPE_INT, pow(a, b))
+
+    def _fpow(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        a = self._coerce_flt(args[0], "FPOW", location)
+        b = self._coerce_flt(args[1], "FPOW", location)
+        return Value(TYPE_FLT, pow(a, b))
+
     def _root(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, x, n = self._expect_num_pair(args, "ROOT", location)
-        # _expect_num_pair enforces both args are same numeric type (INT or FLT)
-        # Common checks
-        if (t == TYPE_INT and n == 0) or (t == TYPE_FLT and n == 0.0):
-            raise ASMRuntimeError("ROOT exponent must be non-zero", rewrite_rule="ROOT", location=location)
+        return self._root_numeric(t, x, n, rule="ROOT", location=location)
 
-        if t == TYPE_INT:
-            # INT path: n and x are ints
-            # Allow negative x. For negative n, an integer result only exists in
-            # trivial cases (|x| == 1). Disallow otherwise to avoid non-integer results.
-            if n < 0:
-                if x == 0:
-                    raise ASMRuntimeError("Division by zero", rewrite_rule="ROOT", location=location)
-                if abs(x) != 1:
-                    raise ASMRuntimeError("Negative ROOT exponent yields non-integer result", rewrite_rule="ROOT", location=location)
-                # 1**anything == 1 ; (-1)**odd == -1 ; reciprocal of ±1 is itself
-                return Value(TYPE_INT, x)
+    def _iroot(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        x = self._coerce_int(args[0], "IROOT", location)
+        n = self._coerce_int(args[1], "IROOT", location)
+        return self._root_numeric(TYPE_INT, x, n, rule="IROOT", location=location)
 
-            # n > 0: compute integer nth root (floor root for x>=0, sign for odd n)
-            k = n
-            if k == 1:
-                return Value(TYPE_INT, x)
-            if x >= 0:
-                lo = 0
-                hi = 1
-                while pow(hi, k) <= x:
-                    hi <<= 1
-                while lo + 1 < hi:
-                    mid = (lo + hi) // 2
-                    if pow(mid, k) <= x:
-                        lo = mid
-                    else:
-                        hi = mid
-                return Value(TYPE_INT, lo)
-            # x < 0: only odd roots yield integer results
-            if k % 2 == 0:
-                raise ASMRuntimeError("Even root of negative integer", rewrite_rule="ROOT", location=location)
-            ax = -x
-            lo = 0
-            hi = 1
-            while pow(hi, k) <= ax:
-                hi <<= 1
-            while lo + 1 < hi:
-                mid = (lo + hi) // 2
-                if pow(mid, k) <= ax:
-                    lo = mid
-                else:
-                    hi = mid
-            return Value(TYPE_INT, -lo)
-
-        # FLT path
-        # n may be negative; handle sign rules for negative base
-        if x == 0.0 and n < 0.0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="ROOT", location=location)
-        if x < 0.0:
-            # Negative base: allow only when n is integer and odd
-            if not float(n).is_integer() or int(n) % 2 == 0:
-                raise ASMRuntimeError("ROOT of negative float requires odd integer root", rewrite_rule="ROOT", location=location)
-            # Compute signed result; pow handles fractional positive n
-            sign = -1.0
-            return Value(TYPE_FLT, sign * pow(abs(x), 1.0 / n))
-        # general positive base (or zero with non-negative n)
-        return Value(TYPE_FLT, pow(x, 1.0 / n))
+    def _froot(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
+        x = self._coerce_flt(args[0], "FROOT", location)
+        n = self._coerce_flt(args[1], "FROOT", location)
+        return self._root_numeric(TYPE_FLT, x, n, rule="FROOT", location=location)
 
     def _neg(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         t, a = self._expect_num_unary(args, "NEG", location)
@@ -988,6 +1080,12 @@ class Builtins:
             return Value(TYPE_FLT, float(sum(flts)))
         raise ASMRuntimeError("SUM expects INT or FLT arguments", location=location, rewrite_rule="SUM")
 
+    def _isum(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
+        if not values:
+            raise ASMRuntimeError("ISUM requires at least one argument", rewrite_rule="ISUM")
+        ints = [self._coerce_int(v, "ISUM", location) for v in values]
+        return Value(TYPE_INT, sum(ints))
+
     def _prod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
             raise ASMRuntimeError("PROD requires at least one argument", rewrite_rule="PROD")
@@ -999,6 +1097,24 @@ class Builtins:
             flts = [self._expect_flt(v, "PROD", location) for v in values]
             return Value(TYPE_FLT, float(math.prod(flts)))
         raise ASMRuntimeError("PROD expects INT or FLT arguments", location=location, rewrite_rule="PROD")
+
+    def _iprod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
+        if not values:
+            raise ASMRuntimeError("IPROD requires at least one argument", rewrite_rule="IPROD")
+        ints = [self._coerce_int(v, "IPROD", location) for v in values]
+        return Value(TYPE_INT, math.prod(ints))
+
+    def _fsum(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
+        if not values:
+            raise ASMRuntimeError("FSUM requires at least one argument", rewrite_rule="FSUM")
+        flts = [self._coerce_flt(v, "FSUM", location) for v in values]
+        return Value(TYPE_FLT, float(sum(flts)))
+
+    def _fprod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
+        if not values:
+            raise ASMRuntimeError("FPROD requires at least one argument", rewrite_rule="FPROD")
+        flts = [self._coerce_flt(v, "FPROD", location) for v in values]
+        return Value(TYPE_FLT, float(math.prod(flts)))
 
     def _max(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:

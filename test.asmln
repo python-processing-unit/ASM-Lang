@@ -74,6 +74,25 @@ FUNC BUILTIN_TESTS():INT{
     DEL(p)
     DEL(q)
 
+    # Coercing arithmetic (I*/F* operators)
+    ASSERT( EQ( IADD(1, 0.1), 1 ) )          # 1 + int(0.5) = 1
+    ASSERT( EQ( ISUB(10, 0.1), 10 ) )        # 2 - 0 = 2
+    ASSERT( EQ( IMUL(11, 0.1), 0 ) )         # 3 * 0 = 0
+    ASSERT( EQ( IDIV(101, 10), 10 ) )        # 5 // 2 = 2
+    ASSERT( EQ( IPOW(11, 10), 1001 ) )       # 3^2 = 9
+    ASSERT( EQ( IROOT(1000, 11), 10 ) )      # cube_root(8)=2
+    ASSERT( EQ( ISUM(1, 10, 0.1), 11 ) )     # 1 + 2 + 0 = 3
+    ASSERT( EQ( IPROD(1, 10, 11), 110 ) )    # 1*2*3=6
+
+    ASSERT( EQ( FADD(1, 10), 11.0 ) )        # 1 + 2 = 3.0
+    ASSERT( EQ( FSUB(11, 10), 1.0 ) )        # 3 - 2 = 1.0
+    ASSERT( EQ( FMUL(11, 10), 110.0 ) )      # 3 * 2 = 6.0
+    ASSERT( EQ( FDIV(101, 10), 10.1 ) )      # 5 / 2 = 2.5
+    ASSERT( EQ( FPOW(11, 10), 1001.0 ) )     # 3^2 = 9.0
+    ASSERT( EQ( FROOT(1000, 11), 10.0 ) )    # cube_root(8)=2.0
+    ASSERT( EQ( FSUM(1, 10, 0.1), 11.1 ) )   # 1 + 2 + 0.5 = 3.5
+    ASSERT( EQ( FPROD(1, 10, 11), 110.0 ) )  # 1*2*3=6.0
+
     # --- Bitwise and shift-like ops ---
     INT: x = 1010   # 10
     INT: y = 110    # 6
