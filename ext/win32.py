@@ -1,4 +1,4 @@
-"""ASM-Lang extension exposing common Win32 interactions.
+"""Prefix extension exposing common Win32 interactions.
 
 This file provides a generic `WIN_CALL` operator for invoking arbitrary
 functions from Win32 DLLs using `ctypes`, plus a few convenience helpers:
@@ -23,20 +23,20 @@ import ctypes
 import sys
 from typing import Any, Callable, Dict, List, Optional, TYPE_CHECKING
 
-from extensions import ASMExtensionError, ExtensionAPI
+from extensions import PrefixExtensionError, ExtensionAPI
 
 if TYPE_CHECKING:
     from interpreter import Environment, Interpreter, Value
     from parser import Expression, SourceLocation
 
-ASM_LANG_EXTENSION_NAME = "win32"
-ASM_LANG_EXTENSION_API_VERSION = 1
-ASM_LANG_EXTENSION_ASMODULE = True
+PREFIX_EXTENSION_NAME = "win32"
+PREFIX_EXTENSION_API_VERSION = 1
+PREFIX_EXTENSION_ASMODULE = True
 
 
 def _ensure_windows() -> None:
     if sys.platform != "win32":
-        raise ASMExtensionError("win32 extension only supported on Windows")
+        raise PrefixExtensionError("win32 extension only supported on Windows")
 
 
 def _ctype_for(code: str) -> Optional[type[Any]]:
@@ -88,11 +88,11 @@ def _convert_arg(code: str, val: Any) -> Any:
         if isinstance(val, (bytes, bytearray)):
             buf = ctypes.create_string_buffer(bytes(val))
             return ctypes.cast(buf, ctypes.c_void_p)
-        raise ASMExtensionError("B argument must be bytes or bytearray")
-    raise ASMExtensionError(f"Unsupported arg type code: {code}")
+        raise PrefixExtensionError("B argument must be bytes or bytearray")
+    raise PrefixExtensionError(f"Unsupported arg type code: {code}")
 
 
-def asm_lang_register(ext: ExtensionAPI) -> None:
+def prefix_register(ext: ExtensionAPI) -> None:
     """Register operators into the runtime services."""
     _ensure_windows()
 
@@ -106,7 +106,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
         # Lazy imports to avoid import-time surprises
         from interpreter import Value, TYPE_INT, TYPE_STR
         if len(args) < 4:
-            raise ASMExtensionError("WIN_CALL requires at least 4 arguments")
+            raise PrefixExtensionError("WIN_CALL requires at least 4 arguments")
 
         lib_name = args[0].value if hasattr(args[0], "value") else args[0]
         func_name = args[1].value if hasattr(args[1], "value") else args[1]
@@ -114,9 +114,9 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
         ret_type = args[3].value if hasattr(args[3], "value") else args[3]
 
         if not isinstance(lib_name, str):
-            raise ASMExtensionError("WIN_CALL: lib must be a string")
+            raise PrefixExtensionError("WIN_CALL: lib must be a string")
         if not isinstance(func_name, str):
-            raise ASMExtensionError("WIN_CALL: func must be a string")
+            raise PrefixExtensionError("WIN_CALL: func must be a string")
 
         # Normalize library name
         dll_name: str = lib_name if lib_name.lower().endswith(".dll") else lib_name + ".dll"
@@ -127,12 +127,12 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
             try:
                 dll = getattr(ctypes.windll, lib_name)
             except Exception as exc:
-                raise ASMExtensionError(f"Failed to load DLL {dll_name}: {exc}")
+                raise PrefixExtensionError(f"Failed to load DLL {dll_name}: {exc}")
 
         try:
             func: Any = getattr(dll, func_name)
         except AttributeError as exc:
-            raise ASMExtensionError(f"Function {func_name} not found in {dll_name}: {exc}")
+            raise PrefixExtensionError(f"Function {func_name} not found in {dll_name}: {exc}")
 
         # Parse arg types. Accept either comma-separated codes ("P,S,I")
         # or a contiguous string of single-letter codes ("PSSSI").
@@ -199,7 +199,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
         from interpreter import Value, TYPE_INT
         # Args: text[, title]
         if not (1 <= len(args) <= 2):
-            raise ASMExtensionError("WIN_MESSAGE_BOX requires 1 or 2 args")
+            raise PrefixExtensionError("WIN_MESSAGE_BOX requires 1 or 2 args")
         text: Any = args[0].value if hasattr(args[0], "value") else args[0]
         title: Any = args[1].value if len(args) == 2 and hasattr(args[1], "value") else (args[1] if len(args) == 2 else "")
         user32: Any = ctypes.WinDLL("user32.dll")
@@ -217,7 +217,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 1:
-            raise ASMExtensionError("WIN_SLEEP requires 1 arg (milliseconds)")
+            raise PrefixExtensionError("WIN_SLEEP requires 1 arg (milliseconds)")
         ms: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         kernel32: Any = ctypes.WinDLL("kernel32.dll")
         kernel32.Sleep.argtypes = [ctypes.c_uint]
@@ -254,7 +254,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 1:
-            raise ASMExtensionError("WIN_LOAD_LIBRARY requires 1 arg")
+            raise PrefixExtensionError("WIN_LOAD_LIBRARY requires 1 arg")
         name: Any = args[0].value if hasattr(args[0], "value") else args[0]
         dll_name: str = str(name) if str(name).lower().endswith(".dll") else str(name) + ".dll"
         try:
@@ -262,7 +262,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
             # return Python id of dll object as handle (opaque)
             return Value(TYPE_INT, id(h))
         except Exception as exc:
-            raise ASMExtensionError(f"LoadLibrary failed: {exc}")
+            raise PrefixExtensionError(f"LoadLibrary failed: {exc}")
 
     def _free_library(
         interpreter: "Interpreter",
@@ -273,7 +273,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 1:
-            raise ASMExtensionError("WIN_FREE_LIBRARY requires 1 arg (handle id)")
+            raise PrefixExtensionError("WIN_FREE_LIBRARY requires 1 arg (handle id)")
         # We only have the id; can't reliably free Python object. Provide FreeLibrary for handles returned by LoadLibrary via kernel32.
         handle: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         # try calling kernel32.FreeLibrary on handle if it's a real HMODULE
@@ -284,7 +284,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
             res: int = int(kernel32.FreeLibrary(ctypes.c_void_p(handle)))
             return Value(TYPE_INT, int(res))
         except Exception as exc:
-            raise ASMExtensionError(f"FreeLibrary failed: {exc}")
+            raise PrefixExtensionError(f"FreeLibrary failed: {exc}")
 
     def _get_proc_address(
         interpreter: "Interpreter",
@@ -295,7 +295,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 2:
-            raise ASMExtensionError("WIN_GET_PROC_ADDRESS requires 2 args (module_handle, proc_name)")
+            raise PrefixExtensionError("WIN_GET_PROC_ADDRESS requires 2 args (module_handle, proc_name)")
         mod: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         name: Any = args[1].value if hasattr(args[1], "value") else args[1]
         kernel32: Any = ctypes.WinDLL("kernel32.dll")
@@ -305,7 +305,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
             res: Any = kernel32.GetProcAddress(ctypes.c_void_p(mod), str(name).encode("ascii"))
             return Value(TYPE_INT, int(res) if res is not None else 0)
         except Exception as exc:
-            raise ASMExtensionError(f"GetProcAddress failed: {exc}")
+            raise PrefixExtensionError(f"GetProcAddress failed: {exc}")
 
     def _create_file(
         interpreter: "Interpreter",
@@ -316,7 +316,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 5:
-            raise ASMExtensionError("WIN_CREATE_FILE requires 5 args (path, access, share, creation, flags)")
+            raise PrefixExtensionError("WIN_CREATE_FILE requires 5 args (path, access, share, creation, flags)")
         path: Any = args[0].value if hasattr(args[0], "value") else args[0]
         access: int = int(args[1].value if hasattr(args[1], "value") else args[1])
         share: int = int(args[2].value if hasattr(args[2], "value") else args[2])
@@ -345,7 +345,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_STR, TYPE_INT
         if len(args) < 2:
-            raise ASMExtensionError("WIN_READ_FILE requires 2 args (handle, length)")
+            raise PrefixExtensionError("WIN_READ_FILE requires 2 args (handle, length)")
         handle: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         length: int = int(args[1].value if hasattr(args[1], "value") else args[1])
         kernel32: Any = ctypes.WinDLL("kernel32.dll")
@@ -368,7 +368,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 2:
-            raise ASMExtensionError("WIN_WRITE_FILE requires 2 args (handle, data)")
+            raise PrefixExtensionError("WIN_WRITE_FILE requires 2 args (handle, data)")
         handle: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         data: Any = args[1].value if hasattr(args[1], "value") else args[1]
         if isinstance(data, str):
@@ -391,7 +391,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 1:
-            raise ASMExtensionError("WIN_CLOSE_HANDLE requires 1 arg (handle)")
+            raise PrefixExtensionError("WIN_CLOSE_HANDLE requires 1 arg (handle)")
         handle: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         kernel32: Any = ctypes.WinDLL("kernel32.dll")
         kernel32.CloseHandle.argtypes = [ctypes.c_void_p]
@@ -408,7 +408,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 3:
-            raise ASMExtensionError("WIN_VIRTUAL_ALLOC requires 3 args (size, alloc_type, protect)")
+            raise PrefixExtensionError("WIN_VIRTUAL_ALLOC requires 3 args (size, alloc_type, protect)")
         size: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         alloc_type: int = int(args[1].value if hasattr(args[1], "value") else args[1])
         protect: int = int(args[2].value if hasattr(args[2], "value") else args[2])
@@ -427,7 +427,7 @@ def asm_lang_register(ext: ExtensionAPI) -> None:
     ) -> "Value":
         from interpreter import Value, TYPE_INT
         if len(args) < 3:
-            raise ASMExtensionError("WIN_VIRTUAL_FREE requires 3 args (address, size, free_type)")
+            raise PrefixExtensionError("WIN_VIRTUAL_FREE requires 3 args (address, size, free_type)")
         addr: int = int(args[0].value if hasattr(args[0], "value") else args[0])
         size: int = int(args[1].value if hasattr(args[1], "value") else args[1])
         free_type: int = int(args[2].value if hasattr(args[2], "value") else args[2])

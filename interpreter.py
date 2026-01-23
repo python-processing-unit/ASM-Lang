@@ -15,8 +15,8 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union, cast
 from collections import OrderedDict
 from numpy.typing import NDArray
 
-from lexer import ASMError, ASMParseError, Lexer
-from extensions import ASMExtensionError, HookRegistry, RuntimeServices, StepContext, TypeContext, TypeRegistry, TypeSpec, build_default_services
+from lexer import PrefixError, PrefixParseError, Lexer
+from extensions import PrefixExtensionError, HookRegistry, RuntimeServices, StepContext, TypeContext, TypeRegistry, TypeSpec, build_default_services
 from parser import (
     Assignment,
     Declaration,
@@ -111,7 +111,7 @@ class PointerRef:
         return f"<ptr {self.name}>"
 
 
-class ASMRuntimeError(ASMError):
+class PrefixRuntimeError(PrefixError):
     """Raised for runtime faults."""
 
     def __init__(
@@ -192,32 +192,32 @@ class Environment:
             assert found_existing is not None
             existing = found_existing
             if name in found_env.frozen or name in found_env.permafrozen:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Identifier '{name}' is frozen and cannot be reassigned",
                     rewrite_rule="ASSIGN",
                 )
             incoming_ptr = value.value if isinstance(value.value, PointerRef) else None
             if incoming_ptr is not None and incoming_ptr.env is found_env and incoming_ptr.name == name:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "Cannot create self-referential pointer",
                     rewrite_rule="ASSIGN",
                 )
             if isinstance(existing.value, PointerRef):
                 ptr = existing.value
                 if ptr.env is found_env and ptr.name == name:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "Cannot assign through self-referential pointer",
                         rewrite_rule="ASSIGN",
                     )
                 ptr.env.set(ptr.name, value, declared_type=None)
                 return
             if declared_type and existing.type != declared_type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Type mismatch for '{name}': previously declared as {existing.type}",
                     rewrite_rule="ASSIGN",
                 )
             if existing.type != value.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Type mismatch for '{name}': expected {existing.type} but got {value.type}",
                     rewrite_rule="ASSIGN",
                 )
@@ -239,12 +239,12 @@ class Environment:
         if declared_type is None:
             # Assignment without inline declaration: require a prior declaration
             if decl_env is None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Identifier '{name}' must be declared with a type before assignment",
                     rewrite_rule="ASSIGN",
                 )
             if decl_type != value.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Assigned value type {value.type} does not match declaration {decl_type}",
                     rewrite_rule="ASSIGN",
                 )
@@ -255,12 +255,12 @@ class Environment:
         # ensure it matches; otherwise record declaration in current env.
         if decl_env is not None:
             if decl_type != declared_type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Type mismatch for '{name}': previously declared as {decl_type}",
                     rewrite_rule="ASSIGN",
                 )
             if declared_type != value.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Assigned value type {value.type} does not match declaration {declared_type}",
                     rewrite_rule="ASSIGN",
                 )
@@ -269,7 +269,7 @@ class Environment:
 
         # No prior declaration: record it in this environment and create the value
         if declared_type != value.type:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Assigned value type {value.type} does not match declaration {declared_type}",
                 rewrite_rule="ASSIGN",
             )
@@ -285,7 +285,7 @@ class Environment:
             if found is not None:
                 return found
             env = env.parent
-        raise ASMRuntimeError(f"Undefined identifier '{name}'", rewrite_rule="IDENT")
+        raise PrefixRuntimeError(f"Undefined identifier '{name}'", rewrite_rule="IDENT")
 
     def get_optional(self, name: str) -> Optional[Value]:
         # Hot-path: inline _find_env; heavily used by identifier evaluation.
@@ -309,10 +309,10 @@ class Environment:
 
         if found_env is not None:
             if name in found_env.frozen or name in found_env.permafrozen:
-                raise ASMRuntimeError(f"Identifier '{name}' is frozen and cannot be deleted", rewrite_rule="DEL")
+                raise PrefixRuntimeError(f"Identifier '{name}' is frozen and cannot be deleted", rewrite_rule="DEL")
             del found_env.values[name]
             return
-        raise ASMRuntimeError(f"Cannot delete undefined identifier '{name}'", rewrite_rule="DEL")
+        raise PrefixRuntimeError(f"Cannot delete undefined identifier '{name}'", rewrite_rule="DEL")
 
     def has(self, name: str) -> bool:
         env: Optional[Environment] = self
@@ -345,15 +345,15 @@ class Environment:
     def freeze(self, name: str) -> None:
         env = self._find_env(name)
         if env is None:
-            raise ASMRuntimeError(f"Cannot freeze undefined identifier '{name}'", rewrite_rule="FREEZE")
+            raise PrefixRuntimeError(f"Cannot freeze undefined identifier '{name}'", rewrite_rule="FREEZE")
         env.frozen.add(name)
 
     def thaw(self, name: str) -> None:
         env = self._find_env(name)
         if env is None:
-            raise ASMRuntimeError(f"Cannot thaw undefined identifier '{name}'", rewrite_rule="THAW")
+            raise PrefixRuntimeError(f"Cannot thaw undefined identifier '{name}'", rewrite_rule="THAW")
         if name in env.permafrozen:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Identifier '{name}' is permanently frozen and cannot be thawed",
                 rewrite_rule="THAW",
             )
@@ -363,7 +363,7 @@ class Environment:
     def permafreeze(self, name: str) -> None:
         env = self._find_env(name)
         if env is None:
-            raise ASMRuntimeError(f"Cannot permafreeze undefined identifier '{name}'", rewrite_rule="PERMAFREEZE")
+            raise PrefixRuntimeError(f"Cannot permafreeze undefined identifier '{name}'", rewrite_rule="PERMAFREEZE")
         env.frozen.add(name)
         env.permafrozen.add(name)
 
@@ -455,9 +455,9 @@ class BuiltinFunction:
 
     def validate(self, supplied: int) -> None:
         if supplied < self.min_args:
-            raise ASMRuntimeError(f"{self.name} expects at least {self.min_args} arguments", rewrite_rule=self.name)
+            raise PrefixRuntimeError(f"{self.name} expects at least {self.min_args} arguments", rewrite_rule=self.name)
         if self.max_args is not None and supplied > self.max_args:
-            raise ASMRuntimeError(f"{self.name} expects at most {self.max_args} arguments", rewrite_rule=self.name)
+            raise PrefixRuntimeError(f"{self.name} expects at most {self.max_args} arguments", rewrite_rule=self.name)
 
 
 def _as_bool(value: int) -> int:
@@ -654,7 +654,7 @@ class Builtins:
         impl: BuiltinImpl,
     ) -> None:
         if name in self.table:
-            raise ASMExtensionError(f"Cannot override existing operator '{name}'")
+            raise PrefixExtensionError(f"Cannot override existing operator '{name}'")
         self.table[name] = BuiltinFunction(name=name, min_args=min_args, max_args=max_args, impl=impl)
 
     def invoke(
@@ -668,50 +668,50 @@ class Builtins:
     ) -> Value:
         builtin = self.table.get(name)
         if builtin is None:
-            raise ASMRuntimeError(f"Unknown function '{name}'", location=location)
+            raise PrefixRuntimeError(f"Unknown function '{name}'", location=location)
         supplied = len(args)
         if supplied < builtin.min_args:
-            raise ASMRuntimeError(f"{name} expects at least {builtin.min_args} arguments", rewrite_rule=name, location=location)
+            raise PrefixRuntimeError(f"{name} expects at least {builtin.min_args} arguments", rewrite_rule=name, location=location)
         if builtin.max_args is not None and supplied > builtin.max_args:
-            raise ASMRuntimeError(f"{name} expects at most {builtin.max_args} arguments", rewrite_rule=name, location=location)
+            raise PrefixRuntimeError(f"{name} expects at most {builtin.max_args} arguments", rewrite_rule=name, location=location)
         return builtin.impl(interpreter, args, arg_nodes, env, location)
 
     # Helpers
     def _expect_int(self, value: Value, rule: str, location: SourceLocation) -> int:
         value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_INT:
-            raise ASMRuntimeError(f"{rule} expects integer arguments", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects integer arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, int)
         return value.value
 
     def _expect_flt(self, value: Value, rule: str, location: SourceLocation) -> float:
         value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_FLT:
-            raise ASMRuntimeError(f"{rule} expects float arguments", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects float arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, float)
         return value.value
 
     def _expect_num_pair(self, args: List[Value], rule: str, location: SourceLocation) -> Tuple[str, Any, Any]:
         if len(args) != 2:
-            raise ASMRuntimeError(f"{rule} expects 2 arguments", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects 2 arguments", location=location, rewrite_rule=rule)
         a, b = args[0], args[1]
         if a.type != b.type:
-            raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
         if a.type == TYPE_INT:
             return TYPE_INT, self._expect_int(a, rule, location), self._expect_int(b, rule, location)
         if a.type == TYPE_FLT:
             return TYPE_FLT, self._expect_flt(a, rule, location), self._expect_flt(b, rule, location)
-        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
 
     def _expect_num_unary(self, args: List[Value], rule: str, location: SourceLocation) -> Tuple[str, Any]:
         if len(args) != 1:
-            raise ASMRuntimeError(f"{rule} expects 1 argument", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects 1 argument", location=location, rewrite_rule=rule)
         a = args[0]
         if a.type == TYPE_INT:
             return TYPE_INT, self._expect_int(a, rule, location)
         if a.type == TYPE_FLT:
             return TYPE_FLT, self._expect_flt(a, rule, location)
-        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
 
     def _coerce_int(self, value: Value, rule: str, location: SourceLocation) -> int:
         value = self._deref_pointer(value, rule=rule, location=location)
@@ -721,7 +721,7 @@ class Builtins:
         if value.type == TYPE_FLT:
             assert isinstance(value.value, float)
             return int(value.value)
-        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
 
     def _coerce_flt(self, value: Value, rule: str, location: SourceLocation) -> float:
         value = self._deref_pointer(value, rule=rule, location=location)
@@ -731,19 +731,19 @@ class Builtins:
         if value.type == TYPE_INT:
             assert isinstance(value.value, int)
             return float(value.value)
-        raise ASMRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects INT or FLT arguments", location=location, rewrite_rule=rule)
 
     def _root_numeric(self, t: str, x: Any, n: Any, *, rule: str, location: SourceLocation) -> Value:
         # Common checks
         if (t == TYPE_INT and n == 0) or (t == TYPE_FLT and n == 0.0):
-            raise ASMRuntimeError(f"{rule} exponent must be non-zero", rewrite_rule=rule, location=location)
+            raise PrefixRuntimeError(f"{rule} exponent must be non-zero", rewrite_rule=rule, location=location)
 
         if t == TYPE_INT:
             if n < 0:
                 if x == 0:
-                    raise ASMRuntimeError("Division by zero", rewrite_rule=rule, location=location)
+                    raise PrefixRuntimeError("Division by zero", rewrite_rule=rule, location=location)
                 if abs(x) != 1:
-                    raise ASMRuntimeError(f"Negative {rule} exponent yields non-integer result", rewrite_rule=rule, location=location)
+                    raise PrefixRuntimeError(f"Negative {rule} exponent yields non-integer result", rewrite_rule=rule, location=location)
                 return Value(TYPE_INT, x)
 
             k = n
@@ -762,7 +762,7 @@ class Builtins:
                         hi = mid
                 return Value(TYPE_INT, lo)
             if k % 2 == 0:
-                raise ASMRuntimeError("Even root of negative integer", rewrite_rule=rule, location=location)
+                raise PrefixRuntimeError("Even root of negative integer", rewrite_rule=rule, location=location)
             ax = -x
             lo = 0
             hi = 1
@@ -777,10 +777,10 @@ class Builtins:
             return Value(TYPE_INT, -lo)
 
         if x == 0.0 and n < 0.0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule=rule, location=location)
+            raise PrefixRuntimeError("Division by zero", rewrite_rule=rule, location=location)
         if x < 0.0:
             if not float(n).is_integer() or int(n) % 2 == 0:
-                raise ASMRuntimeError(f"{rule} of negative float requires odd integer root", rewrite_rule=rule, location=location)
+                raise PrefixRuntimeError(f"{rule} of negative float requires odd integer root", rewrite_rule=rule, location=location)
             return Value(TYPE_FLT, -1.0 * pow(abs(x), 1.0 / n))
         return Value(TYPE_FLT, pow(x, 1.0 / n))
 
@@ -831,21 +831,21 @@ class Builtins:
         if t == TYPE_INT:
             return Value(TYPE_INT, self._safe_div(a, b))
         if b == 0.0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="DIV", location=location)
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="DIV", location=location)
         return Value(TYPE_FLT, a / b)
 
     def _idiv(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         a = self._coerce_int(args[0], "IDIV", location)
         b = self._coerce_int(args[1], "IDIV", location)
         if b == 0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="IDIV", location=location)
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="IDIV", location=location)
         return Value(TYPE_INT, a // b)
 
     def _fdiv(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         a = self._coerce_flt(args[0], "FDIV", location)
         b = self._coerce_flt(args[1], "FDIV", location)
         if b == 0.0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="FDIV", location=location)
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="FDIV", location=location)
         return Value(TYPE_FLT, a / b)
 
     def _mod(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -853,7 +853,7 @@ class Builtins:
         if t == TYPE_INT:
             return Value(TYPE_INT, self._safe_mod(a, b))
         if b == 0.0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="MOD", location=location)
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="MOD", location=location)
         return Value(TYPE_FLT, a % abs(b))
 
     def _pow(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -866,7 +866,7 @@ class Builtins:
         a = self._coerce_int(args[0], "IPOW", location)
         b = self._coerce_int(args[1], "IPOW", location)
         if b < 0:
-            raise ASMRuntimeError("Negative exponent not supported", rewrite_rule="IPOW", location=location)
+            raise PrefixRuntimeError("Negative exponent not supported", rewrite_rule="IPOW", location=location)
         return Value(TYPE_INT, pow(a, b))
 
     def _fpow(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -902,7 +902,7 @@ class Builtins:
             return Value(TYPE_INT, math.gcd(a, b))
         # For floats, only accept integer-valued inputs.
         if not float(a).is_integer() or not float(b).is_integer():
-            raise ASMRuntimeError("GCD expects integer-valued floats", location=location, rewrite_rule="GCD")
+            raise PrefixRuntimeError("GCD expects integer-valued floats", location=location, rewrite_rule="GCD")
         return Value(TYPE_FLT, float(math.gcd(int(a), int(b))))
 
     def _lcm_num(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -910,7 +910,7 @@ class Builtins:
         if t == TYPE_INT:
             return Value(TYPE_INT, self._lcm(a, b))
         if not float(a).is_integer() or not float(b).is_integer():
-            raise ASMRuntimeError("LCM expects integer-valued floats", location=location, rewrite_rule="LCM")
+            raise PrefixRuntimeError("LCM expects integer-valued floats", location=location, rewrite_rule="LCM")
         return Value(TYPE_FLT, float(math.lcm(int(a), int(b))))
 
     def _gt(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -934,20 +934,20 @@ class Builtins:
         if t == TYPE_INT:
             return Value(TYPE_INT, self._safe_log(a))
         if a <= 0.0:
-            raise ASMRuntimeError("LOG argument must be > 0", rewrite_rule="LOG", location=location)
+            raise PrefixRuntimeError("LOG argument must be > 0", rewrite_rule="LOG", location=location)
         return Value(TYPE_FLT, float(math.floor(math.log2(a))))
 
     def _expect_str(self, value: Value, rule: str, location: SourceLocation) -> str:
         value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_STR:
-            raise ASMRuntimeError(f"{rule} expects string arguments", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects string arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, str)
         return value.value
 
     def _expect_tns(self, value: Value, rule: str, location: SourceLocation) -> Tensor:
         value = self._deref_pointer(value, rule=rule, location=location)
         if value.type != TYPE_TNS:
-            raise ASMRuntimeError(f"{rule} expects tensor arguments", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects tensor arguments", location=location, rewrite_rule=rule)
         assert isinstance(value.value, Tensor)
         return value.value
 
@@ -957,11 +957,11 @@ class Builtins:
         while isinstance(current.value, PointerRef):
             hops += 1
             if hops > 128:
-                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
             ptr = current.value
             target = ptr.env.get_optional(ptr.name)
             if target is None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Pointer target '{ptr.name}' is undefined",
                     location=location,
                     rewrite_rule=rule,
@@ -992,7 +992,7 @@ class Builtins:
         }
         normalized = mapping.get(compact)
         if normalized is None:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Unsupported coding '{coding_raw}'",
                 location=location,
                 rewrite_rule=rule,
@@ -1031,12 +1031,12 @@ class Builtins:
 
     def _safe_div(self, a: int, b: int) -> int:
         if b == 0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="DIV")
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="DIV")
         return a // b
 
     def _safe_cdiv(self, a: int, b: int) -> int:
         if b == 0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="CDIV")
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="CDIV")
         q = a // b
         if a % b == 0:
             return q
@@ -1044,22 +1044,22 @@ class Builtins:
 
     def _safe_mod(self, a: int, b: int) -> int:
         if b == 0:
-            raise ASMRuntimeError("Division by zero", rewrite_rule="MOD")
+            raise PrefixRuntimeError("Division by zero", rewrite_rule="MOD")
         return a % abs(b)
 
     def _safe_pow(self, a: int, b: int) -> int:
         if b < 0:
-            raise ASMRuntimeError("Negative exponent not supported", rewrite_rule="POW")
+            raise PrefixRuntimeError("Negative exponent not supported", rewrite_rule="POW")
         return pow(a, b)
 
     def _shift_left(self, value: int, amount: int) -> int:
         if amount < 0:
-            raise ASMRuntimeError("SHL amount must be non-negative", rewrite_rule="SHL")
+            raise PrefixRuntimeError("SHL amount must be non-negative", rewrite_rule="SHL")
         return value << amount
 
     def _shift_right(self, value: int, amount: int) -> int:
         if amount < 0:
-            raise ASMRuntimeError("SHR amount must be non-negative", rewrite_rule="SHR")
+            raise PrefixRuntimeError("SHR amount must be non-negative", rewrite_rule="SHR")
         return value >> amount
 
     def _lcm(self, a: int, b: int) -> int:
@@ -1070,7 +1070,7 @@ class Builtins:
     # Variadic helpers
     def _sum(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("SUM requires at least one argument", rewrite_rule="SUM")
+            raise PrefixRuntimeError("SUM requires at least one argument", rewrite_rule="SUM")
         first_type = values[0].type
         if first_type == TYPE_INT:
             ints = [self._expect_int(v, "SUM", location) for v in values]
@@ -1078,17 +1078,17 @@ class Builtins:
         if first_type == TYPE_FLT:
             flts = [self._expect_flt(v, "SUM", location) for v in values]
             return Value(TYPE_FLT, float(sum(flts)))
-        raise ASMRuntimeError("SUM expects INT or FLT arguments", location=location, rewrite_rule="SUM")
+        raise PrefixRuntimeError("SUM expects INT or FLT arguments", location=location, rewrite_rule="SUM")
 
     def _isum(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("ISUM requires at least one argument", rewrite_rule="ISUM")
+            raise PrefixRuntimeError("ISUM requires at least one argument", rewrite_rule="ISUM")
         ints = [self._coerce_int(v, "ISUM", location) for v in values]
         return Value(TYPE_INT, sum(ints))
 
     def _prod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("PROD requires at least one argument", rewrite_rule="PROD")
+            raise PrefixRuntimeError("PROD requires at least one argument", rewrite_rule="PROD")
         first_type = values[0].type
         if first_type == TYPE_INT:
             ints = [self._expect_int(v, "PROD", location) for v in values]
@@ -1096,29 +1096,29 @@ class Builtins:
         if first_type == TYPE_FLT:
             flts = [self._expect_flt(v, "PROD", location) for v in values]
             return Value(TYPE_FLT, float(math.prod(flts)))
-        raise ASMRuntimeError("PROD expects INT or FLT arguments", location=location, rewrite_rule="PROD")
+        raise PrefixRuntimeError("PROD expects INT or FLT arguments", location=location, rewrite_rule="PROD")
 
     def _iprod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("IPROD requires at least one argument", rewrite_rule="IPROD")
+            raise PrefixRuntimeError("IPROD requires at least one argument", rewrite_rule="IPROD")
         ints = [self._coerce_int(v, "IPROD", location) for v in values]
         return Value(TYPE_INT, math.prod(ints))
 
     def _fsum(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("FSUM requires at least one argument", rewrite_rule="FSUM")
+            raise PrefixRuntimeError("FSUM requires at least one argument", rewrite_rule="FSUM")
         flts = [self._coerce_flt(v, "FSUM", location) for v in values]
         return Value(TYPE_FLT, float(sum(flts)))
 
     def _fprod(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("FPROD requires at least one argument", rewrite_rule="FPROD")
+            raise PrefixRuntimeError("FPROD requires at least one argument", rewrite_rule="FPROD")
         flts = [self._coerce_flt(v, "FPROD", location) for v in values]
         return Value(TYPE_FLT, float(math.prod(flts)))
 
     def _max(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("MAX requires at least one argument", rewrite_rule="MAX")
+            raise PrefixRuntimeError("MAX requires at least one argument", rewrite_rule="MAX")
         first_type = values[0].type
         # Allow MAX over tensors: flatten all tensor arguments and compute
         # the maximum element. All elements must have the same (scalar)
@@ -1126,7 +1126,7 @@ class Builtins:
         if first_type == TYPE_TNS:
             # Ensure all args are tensors
             if any(v.type != TYPE_TNS for v in values):
-                raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
+                raise PrefixRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
             # Gather all elements from all tensors (flatten)
             elems: List[Value] = []
             for v in values:
@@ -1136,14 +1136,14 @@ class Builtins:
                     # Dereference any pointer values inside the tensor
                     elems.append(self._deref_pointer(el, rule="MAX", location=location))
             if not elems:
-                raise ASMRuntimeError("MAX requires tensors with at least one element", rewrite_rule="MAX", location=location)
+                raise PrefixRuntimeError("MAX requires tensors with at least one element", rewrite_rule="MAX", location=location)
             # All elements must share the same type
             elem_type = elems[0].type
             # Elements must be scalar values; tensors-as-elements are forbidden
             if elem_type == TYPE_TNS or any(e.type == TYPE_TNS for e in elems):
-                raise ASMRuntimeError("MAX tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MAX", location=location)
+                raise PrefixRuntimeError("MAX tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MAX", location=location)
             if any(e.type != elem_type for e in elems):
-                raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
+                raise PrefixRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
             if elem_type == TYPE_INT:
                 ints = [self._expect_int(e, "MAX", location) for e in elems]
                 return Value(TYPE_INT, max(ints))
@@ -1154,10 +1154,10 @@ class Builtins:
                 strs = [self._expect_str(e, "MAX", location) for e in elems]
                 longest = max(strs, key=len)
                 return Value(TYPE_STR, longest)
-            raise ASMRuntimeError("MAX cannot operate on tensors of this element type", rewrite_rule="MAX", location=location)
+            raise PrefixRuntimeError("MAX cannot operate on tensors of this element type", rewrite_rule="MAX", location=location)
 
         if any(v.type != first_type for v in values):
-            raise ASMRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
+            raise PrefixRuntimeError("MAX cannot mix values of different types", rewrite_rule="MAX", location=location)
         if first_type == TYPE_INT:
             ints = [self._expect_int(v, "MAX", location) for v in values]
             return Value(TYPE_INT, max(ints))
@@ -1170,7 +1170,7 @@ class Builtins:
 
     def _min(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("MIN requires at least one argument", rewrite_rule="MIN")
+            raise PrefixRuntimeError("MIN requires at least one argument", rewrite_rule="MIN")
         first_type = values[0].type
         # Allow MIN over tensors: flatten all tensor arguments and compute
         # the minimum element. All elements must have the same (scalar)
@@ -1178,7 +1178,7 @@ class Builtins:
         if first_type == TYPE_TNS:
             # Ensure all args are tensors
             if any(v.type != TYPE_TNS for v in values):
-                raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
+                raise PrefixRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
             # Gather all elements from all tensors (flatten)
             elems: List[Value] = []
             for v in values:
@@ -1186,13 +1186,13 @@ class Builtins:
                 for el in tensor.data.ravel():
                     elems.append(self._deref_pointer(el, rule="MIN", location=location))
             if not elems:
-                raise ASMRuntimeError("MIN requires tensors with at least one element", rewrite_rule="MIN", location=location)
+                raise PrefixRuntimeError("MIN requires tensors with at least one element", rewrite_rule="MIN", location=location)
             # Elements must be scalar values; tensors-as-elements are forbidden
             elem_type = elems[0].type
             if elem_type == TYPE_TNS or any(e.type == TYPE_TNS for e in elems):
-                raise ASMRuntimeError("MIN tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MIN", location=location)
+                raise PrefixRuntimeError("MIN tensor elements must be scalar (INT, FLT, or STR)", rewrite_rule="MIN", location=location)
             if any(e.type != elem_type for e in elems):
-                raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
+                raise PrefixRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
             if elem_type == TYPE_INT:
                 ints = [self._expect_int(e, "MIN", location) for e in elems]
                 return Value(TYPE_INT, min(ints))
@@ -1203,10 +1203,10 @@ class Builtins:
                 strs = [self._expect_str(e, "MIN", location) for e in elems]
                 shortest = min(strs, key=len)
                 return Value(TYPE_STR, shortest)
-            raise ASMRuntimeError("MIN cannot operate on tensors of this element type", rewrite_rule="MIN", location=location)
+            raise PrefixRuntimeError("MIN cannot operate on tensors of this element type", rewrite_rule="MIN", location=location)
 
         if any(v.type != first_type for v in values):
-            raise ASMRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
+            raise PrefixRuntimeError("MIN cannot mix values of different types", rewrite_rule="MIN", location=location)
         if first_type == TYPE_INT:
             ints = [self._expect_int(v, "MIN", location) for v in values]
             return Value(TYPE_INT, min(ints))
@@ -1226,7 +1226,7 @@ class Builtins:
     def _len(self, _: "Interpreter", values: List[Value], __: SourceLocation) -> Value:
         for v in values:
             if v.type not in (TYPE_INT, TYPE_STR):
-                raise ASMRuntimeError("LEN accepts only INT or STR arguments", rewrite_rule="LEN")
+                raise PrefixRuntimeError("LEN accepts only INT or STR arguments", rewrite_rule="LEN")
         return Value(TYPE_INT, len(values))
 
     def _slen(
@@ -1255,12 +1255,12 @@ class Builtins:
 
     def _join(self, _: "Interpreter", values: List[Value], location: SourceLocation) -> Value:
         if not values:
-            raise ASMRuntimeError("JOIN requires at least one argument", rewrite_rule="JOIN")
+            raise PrefixRuntimeError("JOIN requires at least one argument", rewrite_rule="JOIN")
         first_type = values[0].type
         if first_type == TYPE_TNS:
-            raise ASMRuntimeError("JOIN cannot operate on tensors", rewrite_rule="JOIN", location=location)
+            raise PrefixRuntimeError("JOIN cannot operate on tensors", rewrite_rule="JOIN", location=location)
         if any(v.type != first_type for v in values):
-            raise ASMRuntimeError("JOIN cannot mix integers and strings", rewrite_rule="JOIN", location=location)
+            raise PrefixRuntimeError("JOIN cannot mix integers and strings", rewrite_rule="JOIN", location=location)
         if first_type == TYPE_STR:
             parts = [self._expect_str(v, "JOIN", location) for v in values]
             return Value(TYPE_STR, "".join(parts))
@@ -1268,7 +1268,7 @@ class Builtins:
         ints = [self._expect_int(v, "JOIN", location) for v in values]
         if any(val < 0 for val in ints):
             if not all(val < 0 for val in ints):
-                raise ASMRuntimeError("JOIN arguments must not mix positive and negative values", rewrite_rule="JOIN")
+                raise PrefixRuntimeError("JOIN arguments must not mix positive and negative values", rewrite_rule="JOIN")
             abs_vals = [abs(v) for v in ints]
             bits = "".join("0" if v == 0 else format(v, "b") for v in abs_vals)
             return Value(TYPE_INT, -int(bits or "0", 2))
@@ -1286,7 +1286,7 @@ class Builtins:
         text = self._expect_str(args[0], "SPLIT", location)
         delimiter = " " if len(args) == 1 else self._expect_str(args[1], "SPLIT", location)
         if delimiter == "":
-            raise ASMRuntimeError("SPLIT delimiter must not be empty", location=location, rewrite_rule="SPLIT")
+            raise PrefixRuntimeError("SPLIT delimiter must not be empty", location=location, rewrite_rule="SPLIT")
 
         parts = text.split(delimiter)
         data = np.array([Value(TYPE_STR, part) for part in parts], dtype=object)
@@ -1303,7 +1303,7 @@ class Builtins:
         # KEYS(MAP: map):TNS -> returns 1-D tensor of the map's keys in insertion order
         val = args[0]
         if val.type != TYPE_MAP:
-            raise ASMRuntimeError("KEYS expects a MAP argument", location=location, rewrite_rule="KEYS")
+            raise PrefixRuntimeError("KEYS expects a MAP argument", location=location, rewrite_rule="KEYS")
         m = val.value
         assert isinstance(m, Map)
         out: List[Value] = []
@@ -1315,7 +1315,7 @@ class Builtins:
             elif key_type == TYPE_STR:
                 out.append(Value(TYPE_STR, key_val))
             else:
-                raise ASMRuntimeError("Unsupported map key type", location=location, rewrite_rule="KEYS")
+                raise PrefixRuntimeError("Unsupported map key type", location=location, rewrite_rule="KEYS")
         arr = np.array(out, dtype=object)
         return Value(TYPE_TNS, Tensor(shape=[len(out)], data=arr))
 
@@ -1330,7 +1330,7 @@ class Builtins:
         # VALUES(MAP: map):TNS -> returns 1-D tensor of the map's values in insertion order
         val = args[0]
         if val.type != TYPE_MAP:
-            raise ASMRuntimeError("VALUES expects a MAP argument", location=location, rewrite_rule="VALUES")
+            raise PrefixRuntimeError("VALUES expects a MAP argument", location=location, rewrite_rule="VALUES")
         m = val.value
         assert isinstance(m, Map)
         out: List[Value] = [v for v in m.data.values()]
@@ -1347,13 +1347,13 @@ class Builtins:
     ) -> Value:
         # KEYIN(INT|FLT|STR: key, MAP: map):INT -> 1 if the key exists in map
         if len(args) != 2:
-            raise ASMRuntimeError("KEYIN requires two arguments", location=location, rewrite_rule="KEYIN")
+            raise PrefixRuntimeError("KEYIN requires two arguments", location=location, rewrite_rule="KEYIN")
         key = args[0]
         mval = args[1]
         if mval.type != TYPE_MAP:
-            raise ASMRuntimeError("KEYIN expects a MAP as second argument", location=location, rewrite_rule="KEYIN")
+            raise PrefixRuntimeError("KEYIN expects a MAP as second argument", location=location, rewrite_rule="KEYIN")
         if key.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-            raise ASMRuntimeError("KEYIN expects key of type INT, FLT, or STR", location=location, rewrite_rule="KEYIN")
+            raise PrefixRuntimeError("KEYIN expects key of type INT, FLT, or STR", location=location, rewrite_rule="KEYIN")
         m = mval.value
         assert isinstance(m, Map)
         exists = (key.type, key.value) in m.data
@@ -1369,11 +1369,11 @@ class Builtins:
     ) -> Value:
         # VALUEIN(ANY: value, MAP: map):INT -> 1 if any map value equals value
         if len(args) != 2:
-            raise ASMRuntimeError("VALUEIN requires two arguments", location=location, rewrite_rule="VALUEIN")
+            raise PrefixRuntimeError("VALUEIN requires two arguments", location=location, rewrite_rule="VALUEIN")
         needle = args[0]
         mval = args[1]
         if mval.type != TYPE_MAP:
-            raise ASMRuntimeError("VALUEIN expects a MAP as second argument", location=location, rewrite_rule="VALUEIN")
+            raise PrefixRuntimeError("VALUEIN expects a MAP as second argument", location=location, rewrite_rule="VALUEIN")
         m = mval.value
         assert isinstance(m, Map)
         for v in m.data.values():
@@ -1398,7 +1398,7 @@ class Builtins:
         # If `shape` is true, require that any matching TNS values have identical
         # shapes between `map` and `template`.
         if len(args) not in (2, 3, 4, 5):
-            raise ASMRuntimeError("MATCH requires 2 to 5 arguments", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH requires 2 to 5 arguments", location=location, rewrite_rule="MATCH")
         mval = args[0]
         tval = args[1]
         typing_flag = args[2] if len(args) >= 3 else Value(TYPE_INT, 0)
@@ -1406,15 +1406,15 @@ class Builtins:
         shape_flag = args[4] if len(args) >= 5 else Value(TYPE_INT, 0)
 
         if mval.type != TYPE_MAP:
-            raise ASMRuntimeError("MATCH expects a MAP as first argument", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH expects a MAP as first argument", location=location, rewrite_rule="MATCH")
         if tval.type != TYPE_MAP:
-            raise ASMRuntimeError("MATCH expects a MAP as second argument", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH expects a MAP as second argument", location=location, rewrite_rule="MATCH")
         if typing_flag.type != TYPE_INT:
-            raise ASMRuntimeError("MATCH expects typing flag to be INT", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH expects typing flag to be INT", location=location, rewrite_rule="MATCH")
         if recurse_flag.type != TYPE_INT:
-            raise ASMRuntimeError("MATCH expects recurse flag to be INT", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH expects recurse flag to be INT", location=location, rewrite_rule="MATCH")
         if shape_flag.type != TYPE_INT:
-            raise ASMRuntimeError("MATCH expects shape flag to be INT", location=location, rewrite_rule="MATCH")
+            raise PrefixRuntimeError("MATCH expects shape flag to be INT", location=location, rewrite_rule="MATCH")
 
         m = mval.value
         t = tval.value
@@ -1475,7 +1475,7 @@ class Builtins:
         # INV(MAP: map):MAP -> reverse key/value pairs. Values must be usable as keys.
         val = args[0]
         if val.type != TYPE_MAP:
-            raise ASMRuntimeError("INV expects a MAP argument", location=location, rewrite_rule="INV")
+            raise PrefixRuntimeError("INV expects a MAP argument", location=location, rewrite_rule="INV")
 
         m = val.value
         assert isinstance(m, Map)
@@ -1484,14 +1484,14 @@ class Builtins:
             # Map keys are always scalar; map values may be anything, but INV
             # requires values to be legal keys.
             if entry_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "INV requires all map values to be INT, FLT, or STR",
                     location=location,
                     rewrite_rule="INV",
                 )
             inv_key = (entry_val.type, entry_val.value)
             if inv_key in out.data:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "INV cannot invert map with duplicate values",
                     location=location,
                     rewrite_rule="INV",
@@ -1504,7 +1504,7 @@ class Builtins:
             elif key_type == TYPE_STR:
                 out.data[inv_key] = Value(TYPE_STR, key_val)
             else:
-                raise ASMRuntimeError("INV encountered unsupported map key type", location=location, rewrite_rule="INV")
+                raise PrefixRuntimeError("INV encountered unsupported map key type", location=location, rewrite_rule="INV")
         return Value(TYPE_MAP, out)
 
     # Boolean-like operators treating strings via emptiness
@@ -1534,10 +1534,10 @@ class Builtins:
     def _in(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         # IN(ANY: value, TNS: tensor):INT -> 1 if value is contained anywhere in tensor, else 0
         if len(args) != 2:
-            raise ASMRuntimeError("IN requires two arguments", location=location, rewrite_rule="IN")
+            raise PrefixRuntimeError("IN requires two arguments", location=location, rewrite_rule="IN")
         needle, haystack = args
         if haystack.type != TYPE_TNS:
-            raise ASMRuntimeError("IN requires a tensor as second argument", location=location, rewrite_rule="IN")
+            raise PrefixRuntimeError("IN requires a tensor as second argument", location=location, rewrite_rule="IN")
         assert isinstance(haystack.value, Tensor)
         for item in haystack.value.data.flat:
             if interpreter._values_equal(needle, item):
@@ -1549,9 +1549,9 @@ class Builtins:
         hi = self._expect_int(hi_val, "SLICE", location)
         lo = self._expect_int(lo_val, "SLICE", location)
         if hi < lo:
-            raise ASMRuntimeError("SLICE: hi must be >= lo", rewrite_rule="SLICE", location=location)
+            raise PrefixRuntimeError("SLICE: hi must be >= lo", rewrite_rule="SLICE", location=location)
         if hi < 0 or lo < 0:
-            raise ASMRuntimeError("SLICE: indices must be non-negative", rewrite_rule="SLICE", location=location)
+            raise PrefixRuntimeError("SLICE: indices must be non-negative", rewrite_rule="SLICE", location=location)
         if target.type == TYPE_INT:
             width = hi - lo + 1
             if width <= 0:
@@ -1560,13 +1560,13 @@ class Builtins:
             result = (self._expect_int(target, "SLICE", location) & mask) >> lo
             return Value(TYPE_INT, result)
         if target.type != TYPE_STR:
-            raise ASMRuntimeError("SLICE target must be int or string", rewrite_rule="SLICE", location=location)
+            raise PrefixRuntimeError("SLICE target must be int or string", rewrite_rule="SLICE", location=location)
         text = self._expect_str(target, "SLICE", location)
         length = len(text)
         start = length - 1 - hi
         end = length - 1 - lo
         if start < 0 or end < 0 or start > end:
-            raise ASMRuntimeError("SLICE indices out of range for string", rewrite_rule="SLICE", location=location)
+            raise PrefixRuntimeError("SLICE indices out of range for string", rewrite_rule="SLICE", location=location)
         return Value(TYPE_STR, text[start : end + 1])
 
     def _int_op(self, _: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
@@ -1616,13 +1616,13 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("ISFLT requires an identifier argument", location=location, rewrite_rule="ISFLT")
+            raise PrefixRuntimeError("ISFLT requires an identifier argument", location=location, rewrite_rule="ISFLT")
         name = arg_nodes[0].name
         if not env.has(name):
             return Value(TYPE_INT, 0)
         try:
             val = env.get(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 1 if val.type == TYPE_FLT else 0)
@@ -1668,7 +1668,7 @@ class Builtins:
         n = scaled.numerator
         d = scaled.denominator
         if d == 0:
-            raise ASMRuntimeError("ROUND internal error", location=location, rewrite_rule="ROUND")
+            raise PrefixRuntimeError("ROUND internal error", location=location, rewrite_rule="ROUND")
 
         def _floor_div(a: int, b: int) -> int:
             return a // b
@@ -1689,7 +1689,7 @@ class Builtins:
             else:
                 q = _ceil_div(2 * n - d, 2 * d)
         else:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 "ROUND mode must be one of floor, ceiling/ceil, zero, logical/half-up",
                 location=location,
                 rewrite_rule="ROUND",
@@ -1746,7 +1746,7 @@ class Builtins:
         s = self._expect_str(args[0], "STRIP", location)
         rem = self._expect_str(args[1], "STRIP", location)
         if rem == "":
-            raise ASMRuntimeError("STRIP: remove substring must not be empty", location=location, rewrite_rule="STRIP")
+            raise PrefixRuntimeError("STRIP: remove substring must not be empty", location=location, rewrite_rule="STRIP")
         return Value(TYPE_STR, s.replace(rem, ""))
 
     def _replace(
@@ -1762,17 +1762,17 @@ class Builtins:
         a = self._expect_str(args[1], "REPLACE", location)
         b = self._expect_str(args[2], "REPLACE", location)
         if a == "":
-            raise ASMRuntimeError("REPLACE: substring must not be empty", location=location, rewrite_rule="REPLACE")
+            raise PrefixRuntimeError("REPLACE: substring must not be empty", location=location, rewrite_rule="REPLACE")
         return Value(TYPE_STR, s.replace(a, b))
 
     def _safe_log(self, value: int) -> int:
         if value <= 0:
-            raise ASMRuntimeError("LOG argument must be > 0", rewrite_rule="LOG")
+            raise PrefixRuntimeError("LOG argument must be > 0", rewrite_rule="LOG")
         return value.bit_length() - 1
 
     def _safe_clog(self, value: int) -> int:
         if value <= 0:
-            raise ASMRuntimeError("CLOG argument must be > 0", rewrite_rule="CLOG")
+            raise PrefixRuntimeError("CLOG argument must be > 0", rewrite_rule="CLOG")
         if value & (value - 1) == 0:
             return value.bit_length() - 1
         return value.bit_length()
@@ -1832,15 +1832,15 @@ class Builtins:
         """Resolve a module name to a filesystem path.
         
         Supports package notation using '..' as the package separator:
-        - IMPORT(pkg) -> looks for pkg/init.asmln first, then pkg.asmln
-        - IMPORT(pkg..mod) -> looks for pkg/mod.asmln
-        - IMPORT(pkg..sub..mod) -> looks for pkg/sub/mod.asmln
+        - IMPORT(pkg) -> looks for pkg/init.pre first, then pkg.pre
+        - IMPORT(pkg..mod) -> looks for pkg/mod.pre
+        - IMPORT(pkg..sub..mod) -> looks for pkg/sub/mod.pre
         
         When a package and module with the same name exist at the same location,
         the package is preferred.
         
         Returns a tuple of (resolved_path, source_text).
-        Raises ASMRuntimeError if the module cannot be found.
+        Raises PrefixRuntimeError if the module cannot be found.
         """
         interpreter_dir = os.path.dirname(os.path.abspath(sys.argv[0]))
         lib_dir = os.path.join(interpreter_dir, "lib")
@@ -1850,13 +1850,13 @@ class Builtins:
         if ".." in module_name:
             # Package-qualified import: pkg..mod or pkg..sub..mod
             parts = module_name.split("..")
-            # Build the path: pkg/sub/mod.asmln
-            relative_path = os.path.join(*parts[:-1], f"{parts[-1]}.asmln")
+            # Build the path: pkg/sub/mod.pre
+            relative_path = os.path.join(*parts[:-1], f"{parts[-1]}.pre")
         else:
             # Simple module name - could be a module or a package
-            # First try as a package: look for pkg/init.asmln
-            pkg_init_path = os.path.join(base_dir, module_name, "init.asmln")
-            lib_pkg_init_path = os.path.join(lib_dir, module_name, "init.asmln")
+            # First try as a package: look for pkg/init.pre
+            pkg_init_path = os.path.join(base_dir, module_name, "init.pre")
+            lib_pkg_init_path = os.path.join(lib_dir, module_name, "init.pre")
             
             # Check for package in base_dir
             if os.path.isdir(os.path.join(base_dir, module_name)):
@@ -1867,8 +1867,8 @@ class Builtins:
                     except OSError:
                         pass
                 else:
-                    raise ASMRuntimeError(
-                        f"Package '{module_name}' exists but has no init.asmln",
+                    raise PrefixRuntimeError(
+                        f"Package '{module_name}' exists but has no init.pre",
                         location=location,
                         rewrite_rule="IMPORT"
                     )
@@ -1882,14 +1882,14 @@ class Builtins:
                     except OSError:
                         pass
                 else:
-                    raise ASMRuntimeError(
-                        f"Package '{module_name}' exists but has no init.asmln",
+                    raise PrefixRuntimeError(
+                        f"Package '{module_name}' exists but has no init.pre",
                         location=location,
                         rewrite_rule="IMPORT"
                     )
             
-            # Fall back to module file: pkg.asmln
-            relative_path = f"{module_name}.asmln"
+            # Fall back to module file: pkg.pre
+            relative_path = f"{module_name}.pre"
         
         # Try base_dir first
         candidate = os.path.join(base_dir, relative_path)
@@ -1909,7 +1909,7 @@ class Builtins:
             except OSError:
                 pass
         
-        raise ASMRuntimeError(
+        raise PrefixRuntimeError(
             f"Failed to import '{module_name}': module not found",
             location=location,
             rewrite_rule="IMPORT"
@@ -1949,12 +1949,12 @@ class Builtins:
         pre_function_keys = set(interpreter.functions.keys())
         # Accept either IMPORT(module) or IMPORT(module, alias)
         if len(arg_nodes) not in (1, 2) or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("IMPORT expects module name identifier", location=location, rewrite_rule="IMPORT")
+            raise PrefixRuntimeError("IMPORT expects module name identifier", location=location, rewrite_rule="IMPORT")
 
         module_name = arg_nodes[0].name
         if len(arg_nodes) == 2:
             if not isinstance(arg_nodes[1], Identifier):
-                raise ASMRuntimeError("IMPORT alias must be an identifier", location=location, rewrite_rule="IMPORT")
+                raise PrefixRuntimeError("IMPORT alias must be an identifier", location=location, rewrite_rule="IMPORT")
             export_prefix = arg_nodes[1].name
         else:
             export_prefix = module_name
@@ -2012,29 +2012,29 @@ class Builtins:
         # --- IMPORT-time extension loading ---
         # When importing a module, attempt to load any companion extensions so
         # their operators are available immediately. Look for a companion
-        # pointer file (<module>.asmxt) next to the module file (or the copy
+        # pointer file (<module>.prex) next to the module file (or the copy
         # in the interpreter's lib/), and also check the interpreter's built-in
         # ext/ directory for an <module>.py extension module.
         try:
             import extensions as _extmod
 
-            # If a companion .asmxt exists alongside the module, load listed extensions.
-            companion_asmxt = os.path.splitext(module_path)[0] + ".asmxt"
-            if os.path.exists(companion_asmxt):
+            # If a companion .prex exists alongside the module, load listed extensions.
+            companion_prex = os.path.splitext(module_path)[0] + ".prex"
+            if os.path.exists(companion_prex):
                 try:
-                    asm_paths = _extmod.read_asmx(companion_asmxt)
-                    for p in _extmod.gather_extension_paths(asm_paths):
+                    prefix_paths = _extmod.read_prex(companion_prex)
+                    for p in _extmod.gather_extension_paths(prefix_paths):
                         mod = _extmod.load_extension_module(p)
-                        api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                        api_version = getattr(mod, "PREFIX_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
                         if api_version != _extmod.EXTENSION_API_VERSION:
-                            raise ASMExtensionError(
+                            raise PrefixExtensionError(
                                 f"Extension {p} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
                             )
-                        register = getattr(mod, "asm_lang_register", None)
+                        register = getattr(mod, "prefix_register", None)
                         if register is None or not callable(register):
-                            raise ASMExtensionError(f"Extension {p} must define callable asm_lang_register(ext)")
-                        ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(p))[0])
-                        ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                            raise PrefixExtensionError(f"Extension {p} must define callable prefix_register(ext)")
+                        ext_name = getattr(mod, "PREFIX_EXTENSION_NAME", os.path.splitext(os.path.basename(p))[0])
+                        ext_asmodule = bool(getattr(mod, "PREFIX_EXTENSION_ASMODULE", False))
                         ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
                         before = len(interpreter.services.operators)
                         register(ext_api)
@@ -2049,22 +2049,22 @@ class Builtins:
                                 max_args=max_args,
                                 impl=impl,
                             )
-                except ASMExtensionError as exc:
-                    raise ASMExtensionError(f"Failed to load extensions from {companion_asmxt}: {exc}") from exc
+                except PrefixExtensionError as exc:
+                    raise PrefixExtensionError(f"Failed to load extensions from {companion_prex}: {exc}") from exc
 
             # Next, check for a single-file built-in extension named <module>.py
             builtin = _extmod._resolve_in_builtin_ext(f"{ext_module_name}.py")
             if builtin is not None and os.path.exists(builtin):
                 mod = _extmod.load_extension_module(builtin)
-                api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                api_version = getattr(mod, "PREFIX_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
                 if api_version != _extmod.EXTENSION_API_VERSION:
-                    raise ASMExtensionError(
+                    raise PrefixExtensionError(
                         f"Extension {builtin} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
                     )
-                register = getattr(mod, "asm_lang_register", None)
+                register = getattr(mod, "prefix_register", None)
                 if register is not None and callable(register):
-                    ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(builtin))[0])
-                    ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                    ext_name = getattr(mod, "PREFIX_EXTENSION_NAME", os.path.splitext(os.path.basename(builtin))[0])
+                    ext_asmodule = bool(getattr(mod, "PREFIX_EXTENSION_ASMODULE", False))
                     ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
                     before = len(interpreter.services.operators)
                     register(ext_api)
@@ -2077,12 +2077,12 @@ class Builtins:
                             max_args=max_args,
                             impl=impl,
                         )
-        except ASMExtensionError as exc:
-            raise ASMRuntimeError(str(exc), location=location, rewrite_rule="IMPORT")
+        except PrefixExtensionError as exc:
+            raise PrefixRuntimeError(str(exc), location=location, rewrite_rule="IMPORT")
         except Exception:
-            # Non-fatal: do not prevent importing the asm module if extension
+            # Non-fatal: do not prevent importing the prefix module if extension
             # loading fails unexpectedly; convert to runtime error only when
-            # it's an ASMExtensionError above.
+            # it's an PrefixExtensionError above.
             pass
 
         lexer = Lexer(source_text, module_path)
@@ -2097,12 +2097,12 @@ class Builtins:
             interpreter._execute_block(program.statements, module_env)
         except Exception as exc:
             # Restore interpreter function table on error and convert
-            # unexpected Python exceptions into ASMRuntimeError so they
+            # unexpected Python exceptions into PrefixRuntimeError so they
             # are reported using the language's traceback machinery.
             interpreter.functions = prev_functions
-            if isinstance(exc, ASMRuntimeError):
+            if isinstance(exc, PrefixRuntimeError):
                 raise
-            raise ASMRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT")
+            raise PrefixRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT")
 
         # Collect functions that were added by executing the module
         new_funcs = {n: f for n, f in interpreter.functions.items() if n not in prev_functions}
@@ -2174,11 +2174,11 @@ class Builtins:
         # IMPORT_PATH(path): import the module located at absolute filesystem path `path`.
         path = self._expect_str(args[0], "IMPORT_PATH", location)
         if not os.path.isabs(path):
-            raise ASMRuntimeError("IMPORT_PATH expects an absolute path", location=location, rewrite_rule="IMPORT_PATH")
+            raise PrefixRuntimeError("IMPORT_PATH expects an absolute path", location=location, rewrite_rule="IMPORT_PATH")
 
         module_path = os.path.abspath(path)
         if not os.path.exists(module_path):
-            raise ASMRuntimeError(f"Module file not found: {module_path}", location=location, rewrite_rule="IMPORT_PATH")
+            raise PrefixRuntimeError(f"Module file not found: {module_path}", location=location, rewrite_rule="IMPORT_PATH")
 
         module_name = os.path.splitext(os.path.basename(module_path))[0]
 
@@ -2203,28 +2203,28 @@ class Builtins:
             with open(module_path, "r", encoding="utf-8") as handle:
                 source_text = handle.read()
         except OSError as exc:
-            raise ASMRuntimeError(f"Failed to import path '{module_path}': {exc}", location=location, rewrite_rule="IMPORT_PATH")
+            raise PrefixRuntimeError(f"Failed to import path '{module_path}': {exc}", location=location, rewrite_rule="IMPORT_PATH")
 
         # --- extension loading (same behavior as IMPORT) ---
         try:
             import extensions as _extmod
 
-            companion_asmxt = os.path.splitext(module_path)[0] + ".asmxt"
-            if os.path.exists(companion_asmxt):
+            companion_prex = os.path.splitext(module_path)[0] + ".prex"
+            if os.path.exists(companion_prex):
                 try:
-                    asm_paths = _extmod.read_asmx(companion_asmxt)
-                    for p in _extmod.gather_extension_paths(asm_paths):
+                    prefix_paths = _extmod.read_prex(companion_prex)
+                    for p in _extmod.gather_extension_paths(prefix_paths):
                         mod = _extmod.load_extension_module(p)
-                        api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                        api_version = getattr(mod, "PREFIX_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
                         if api_version != _extmod.EXTENSION_API_VERSION:
-                            raise ASMExtensionError(
+                            raise PrefixExtensionError(
                                 f"Extension {p} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
                             )
-                        register = getattr(mod, "asm_lang_register", None)
+                        register = getattr(mod, "prefix_register", None)
                         if register is None or not callable(register):
-                            raise ASMExtensionError(f"Extension {p} must define callable asm_lang_register(ext)")
-                        ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(p))[0])
-                        ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                            raise PrefixExtensionError(f"Extension {p} must define callable prefix_register(ext)")
+                        ext_name = getattr(mod, "PREFIX_EXTENSION_NAME", os.path.splitext(os.path.basename(p))[0])
+                        ext_asmodule = bool(getattr(mod, "PREFIX_EXTENSION_ASMODULE", False))
                         ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
                         before = len(interpreter.services.operators)
                         register(ext_api)
@@ -2237,21 +2237,21 @@ class Builtins:
                                 max_args=max_args,
                                 impl=impl,
                             )
-                except ASMExtensionError as exc:
-                    raise ASMExtensionError(f"Failed to load extensions from {companion_asmxt}: {exc}") from exc
+                except PrefixExtensionError as exc:
+                    raise PrefixExtensionError(f"Failed to load extensions from {companion_prex}: {exc}") from exc
 
             builtin = _extmod._resolve_in_builtin_ext(f"{module_name}.py")
             if builtin is not None and os.path.exists(builtin):
                 mod = _extmod.load_extension_module(builtin)
-                api_version = getattr(mod, "ASM_LANG_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
+                api_version = getattr(mod, "PREFIX_EXTENSION_API_VERSION", _extmod.EXTENSION_API_VERSION)
                 if api_version != _extmod.EXTENSION_API_VERSION:
-                    raise ASMExtensionError(
+                    raise PrefixExtensionError(
                         f"Extension {builtin} requires API {api_version}, host supports {_extmod.EXTENSION_API_VERSION}"
                     )
-                register = getattr(mod, "asm_lang_register", None)
+                register = getattr(mod, "prefix_register", None)
                 if register is not None and callable(register):
-                    ext_name = getattr(mod, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(builtin))[0])
-                    ext_asmodule = bool(getattr(mod, "ASM_LANG_EXTENSION_ASMODULE", False))
+                    ext_name = getattr(mod, "PREFIX_EXTENSION_NAME", os.path.splitext(os.path.basename(builtin))[0])
+                    ext_asmodule = bool(getattr(mod, "PREFIX_EXTENSION_ASMODULE", False))
                     ext_api = _extmod.ExtensionAPI(services=interpreter.services, ext_name=str(ext_name), asmodule=ext_asmodule)
                     before = len(interpreter.services.operators)
                     register(ext_api)
@@ -2264,8 +2264,8 @@ class Builtins:
                             max_args=max_args,
                             impl=impl,
                         )
-        except ASMExtensionError as exc:
-            raise ASMRuntimeError(str(exc), location=location, rewrite_rule="IMPORT_PATH")
+        except PrefixExtensionError as exc:
+            raise PrefixRuntimeError(str(exc), location=location, rewrite_rule="IMPORT_PATH")
         except Exception:
             pass
 
@@ -2281,9 +2281,9 @@ class Builtins:
             interpreter._execute_block(program.statements, module_env)
         except Exception as exc:
             interpreter.functions = prev_functions
-            if isinstance(exc, ASMRuntimeError):
+            if isinstance(exc, PrefixRuntimeError):
                 raise
-            raise ASMRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT_PATH")
+            raise PrefixRuntimeError(f"Import failed: {exc}", location=location, rewrite_rule="IMPORT_PATH")
 
         new_funcs = {n: f for n, f in interpreter.functions.items() if n not in prev_functions}
         registered_functions: List[Function] = []
@@ -2416,7 +2416,7 @@ class Builtins:
                     ctx = TypeContext(interpreter=interpreter, location=loc)
                     rendered.append(spec.to_str(ctx, arg))
                 else:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "PRINT accepts INT or STR arguments",
                         location=loc,
                         rewrite_rule="PRINT",
@@ -2451,7 +2451,7 @@ class Builtins:
     ) -> Value:
         cond = self._condition_from_value(interpreter, args[0], location) if args else 0
         if cond == 0:
-            raise ASMRuntimeError("Assertion failed", location=location, rewrite_rule="ASSERT")
+            raise PrefixRuntimeError("Assertion failed", location=location, rewrite_rule="ASSERT")
         return Value(TYPE_INT, 1)
 
     def _throw(
@@ -2477,13 +2477,13 @@ class Builtins:
                     ctx = TypeContext(interpreter=interpreter, location=location)
                     rendered.append(spec.to_str(ctx, arg))
                 else:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "THROW accepts INT or STR arguments",
                         location=location,
                         rewrite_rule="THROW",
                     )
         msg = "".join(rendered)
-        raise ASMRuntimeError(msg, location=location, rewrite_rule="THROW")
+        raise PrefixRuntimeError(msg, location=location, rewrite_rule="THROW")
 
     def _delete(
         self,
@@ -2494,14 +2494,14 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes:
-            raise ASMRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
+            raise PrefixRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
         first = arg_nodes[0]
         # Deleting a top-level identifier
         if isinstance(first, Identifier):
             name = first.name
             try:
                 env.delete(name)
-            except ASMRuntimeError as err:
+            except PrefixRuntimeError as err:
                 err.location = location
                 raise
             return Value(TYPE_INT, 0)
@@ -2510,13 +2510,13 @@ class Builtins:
         if isinstance(first, IndexExpression):
             base_expr, index_nodes, index_flags = interpreter._gather_index_chain(first)
             if not isinstance(base_expr, Identifier):
-                raise ASMRuntimeError("DEL expects identifier base for indexed deletion", location=location, rewrite_rule="DEL")
+                raise PrefixRuntimeError("DEL expects identifier base for indexed deletion", location=location, rewrite_rule="DEL")
             base_val = interpreter._evaluate_expression(base_expr, env)
             if base_val.type != TYPE_MAP:
-                raise ASMRuntimeError("DEL indexed deletion requires a map base", location=location, rewrite_rule="DEL")
+                raise PrefixRuntimeError("DEL indexed deletion requires a map base", location=location, rewrite_rule="DEL")
             # Ensure the bracket form matches the base type: maps must use '<...>'
             if not all(index_flags):
-                raise ASMRuntimeError("Map indexed deletion requires angle-brackets '<...>'", location=location, rewrite_rule="DEL")
+                raise PrefixRuntimeError("Map indexed deletion requires angle-brackets '<...>'", location=location, rewrite_rule="DEL")
             assert isinstance(base_val.value, Map)
             eval_expr = interpreter._evaluate_expression
             current_map = base_val.value
@@ -2524,26 +2524,26 @@ class Builtins:
             for node in index_nodes[:-1]:
                 key_val = eval_expr(node, env)
                 if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                    raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
+                    raise PrefixRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
                 key = (key_val.type, key_val.value)
                 if key not in current_map.data:
-                    raise ASMRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="DEL")
+                    raise PrefixRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="DEL")
                 next_val = current_map.data[key]
                 if next_val.type != TYPE_MAP:
-                    raise ASMRuntimeError("Cannot traverse non-map value during DEL", location=location, rewrite_rule="DEL")
+                    raise PrefixRuntimeError("Cannot traverse non-map value during DEL", location=location, rewrite_rule="DEL")
                 current_map = next_val.value
             # Final key
             final_node = index_nodes[-1]
             final_key_val = eval_expr(final_node, env)
             if final_key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
+                raise PrefixRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="DEL")
             final_key = (final_key_val.type, final_key_val.value)
             if final_key not in current_map.data:
-                raise ASMRuntimeError(f"Key not found: {final_key_val.value}", location=location, rewrite_rule="DEL")
+                raise PrefixRuntimeError(f"Key not found: {final_key_val.value}", location=location, rewrite_rule="DEL")
             del current_map.data[final_key]
             return Value(TYPE_INT, 0)
 
-        raise ASMRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
+        raise PrefixRuntimeError("DEL expects identifier or indexed target", location=location, rewrite_rule="DEL")
 
     def _assign(
         self,
@@ -2554,7 +2554,7 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if len(arg_nodes) != 2:
-            raise ASMRuntimeError("ASSIGN expects 2 arguments", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("ASSIGN expects 2 arguments", location=location, rewrite_rule="ASSIGN")
 
         target_node = arg_nodes[0]
         declared_type: Optional[str] = None
@@ -2574,13 +2574,13 @@ class Builtins:
                 return False
 
             if declared_type is not None and "." in name and not _name_exists_or_declared(name):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Cannot create module-qualified name '{name}'",
                     location=location,
                     rewrite_rule="ASSIGN",
                 )
             if name in interpreter.functions:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Identifier '{name}' already bound as function",
                     location=location,
                     rewrite_rule="ASSIGN",
@@ -2591,7 +2591,7 @@ class Builtins:
 
         if isinstance(target_node, IndexExpression):
             if declared_type is not None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "ASSIGN type annotation is only valid for identifier targets",
                     location=location,
                     rewrite_rule="ASSIGN",
@@ -2600,7 +2600,7 @@ class Builtins:
             interpreter._assign_index(target_node, value, env, location)
             return value
 
-        raise ASMRuntimeError("ASSIGN target must be identifier or indexed target", location=location, rewrite_rule="ASSIGN")
+        raise PrefixRuntimeError("ASSIGN target must be identifier or indexed target", location=location, rewrite_rule="ASSIGN")
 
     def _freeze(
         self,
@@ -2611,11 +2611,11 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("FREEZE expects identifier", location=location, rewrite_rule="FREEZE")
+            raise PrefixRuntimeError("FREEZE expects identifier", location=location, rewrite_rule="FREEZE")
         name = arg_nodes[0].name
         try:
             env.freeze(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 0)
@@ -2629,11 +2629,11 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("THAW expects identifier", location=location, rewrite_rule="THAW")
+            raise PrefixRuntimeError("THAW expects identifier", location=location, rewrite_rule="THAW")
         name = arg_nodes[0].name
         try:
             env.thaw(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 0)
@@ -2647,11 +2647,11 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("PERMAFREEZE expects identifier", location=location, rewrite_rule="PERMAFREEZE")
+            raise PrefixRuntimeError("PERMAFREEZE expects identifier", location=location, rewrite_rule="PERMAFREEZE")
         name = arg_nodes[0].name
         try:
             env.permafreeze(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 0)
@@ -2666,21 +2666,21 @@ class Builtins:
     ) -> Value:
         # Expect two identifier nodes: the symbol to export and the module name.
         if not arg_nodes or len(arg_nodes) < 2:
-            raise ASMRuntimeError("EXPORT expects two identifier arguments", location=location, rewrite_rule="EXPORT")
+            raise PrefixRuntimeError("EXPORT expects two identifier arguments", location=location, rewrite_rule="EXPORT")
         if not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("EXPORT expects an identifier as the first argument", location=location, rewrite_rule="EXPORT")
+            raise PrefixRuntimeError("EXPORT expects an identifier as the first argument", location=location, rewrite_rule="EXPORT")
         if not isinstance(arg_nodes[1], Identifier):
-            raise ASMRuntimeError("EXPORT expects an identifier as the second argument", location=location, rewrite_rule="EXPORT")
+            raise PrefixRuntimeError("EXPORT expects an identifier as the second argument", location=location, rewrite_rule="EXPORT")
 
         symbol_name = arg_nodes[0].name
         module_name = arg_nodes[1].name
 
         # Ensure the symbol exists in the caller's environment
         if not env.has(symbol_name):
-            raise ASMRuntimeError(f"EXPORT: undefined symbol '{symbol_name}'", location=location, rewrite_rule="EXPORT")
+            raise PrefixRuntimeError(f"EXPORT: undefined symbol '{symbol_name}'", location=location, rewrite_rule="EXPORT")
         try:
             value = env.get(symbol_name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
 
@@ -2691,7 +2691,7 @@ class Builtins:
         prefix = f"{module_name}."
         module_present = any(k.startswith(prefix) for k in env.values.keys()) or any(k.startswith(prefix) for k in interpreter.functions.keys())
         if not module_present:
-            raise ASMRuntimeError(f"Module '{module_name}' not imported", location=location, rewrite_rule="EXPORT")
+            raise PrefixRuntimeError(f"Module '{module_name}' not imported", location=location, rewrite_rule="EXPORT")
 
         dotted = f"{module_name}.{symbol_name}"
         # Create or update the dotted binding in the caller's environment.
@@ -2707,7 +2707,7 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("EXIST requires an identifier argument", location=location, rewrite_rule="EXIST")
+            raise PrefixRuntimeError("EXIST requires an identifier argument", location=location, rewrite_rule="EXIST")
         name = arg_nodes[0].name
         return Value(TYPE_INT, 1 if env.has(name) else 0)
 
@@ -2721,13 +2721,13 @@ class Builtins:
     ) -> Value:
         # Expect an identifier node so we examine the symbol's binding and type
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("ISINT requires an identifier argument", location=location, rewrite_rule="ISINT")
+            raise PrefixRuntimeError("ISINT requires an identifier argument", location=location, rewrite_rule="ISINT")
         name = arg_nodes[0].name
         if not env.has(name):
             return Value(TYPE_INT, 0)
         try:
             val = env.get(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 1 if val.type == TYPE_INT else 0)
@@ -2742,13 +2742,13 @@ class Builtins:
     ) -> Value:
         # Expect an identifier node so we examine the symbol's binding and type
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("ISSTR requires an identifier argument", location=location, rewrite_rule="ISSTR")
+            raise PrefixRuntimeError("ISSTR requires an identifier argument", location=location, rewrite_rule="ISSTR")
         name = arg_nodes[0].name
         if not env.has(name):
             return Value(TYPE_INT, 0)
         try:
             val = env.get(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 1 if val.type == TYPE_STR else 0)
@@ -2762,13 +2762,13 @@ class Builtins:
         location: SourceLocation,
     ) -> Value:
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("ISTNS requires an identifier argument", location=location, rewrite_rule="ISTNS")
+            raise PrefixRuntimeError("ISTNS requires an identifier argument", location=location, rewrite_rule="ISTNS")
         name = arg_nodes[0].name
         if not env.has(name):
             return Value(TYPE_INT, 0)
         try:
             val = env.get(name)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             err.location = location
             raise
         return Value(TYPE_INT, 1 if val.type == TYPE_TNS else 0)
@@ -2783,7 +2783,7 @@ class Builtins:
     ) -> Value:
         # TYPE(ANY: obj):STR -> return the runtime type name of the value as STR
         if len(args) != 1:
-            raise ASMRuntimeError("TYPE expects one argument", location=location, rewrite_rule="TYPE")
+            raise PrefixRuntimeError("TYPE expects one argument", location=location, rewrite_rule="TYPE")
         val = args[0]
         # Return the type string as STR; preserve extension type names if present
         return Value(TYPE_STR, val.type)
@@ -2798,9 +2798,9 @@ class Builtins:
     ) -> Value:
         # SIGNATURE(SYMBOL: sym):STR -> return a textual signature for sym
         if len(args) != 1:
-            raise ASMRuntimeError("SIGNATURE expects one argument", location=location, rewrite_rule="SIGNATURE")
+            raise PrefixRuntimeError("SIGNATURE expects one argument", location=location, rewrite_rule="SIGNATURE")
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("SIGNATURE requires an identifier argument", location=location, rewrite_rule="SIGNATURE")
+            raise PrefixRuntimeError("SIGNATURE requires an identifier argument", location=location, rewrite_rule="SIGNATURE")
         name = arg_nodes[0].name
 
         # First prefer an environment binding
@@ -2814,11 +2814,11 @@ class Builtins:
             elif name in interpreter.functions:
                 func = interpreter.functions[name]
             else:
-                raise ASMRuntimeError(f"Unknown identifier '{name}'", location=location, rewrite_rule="SIGNATURE")
-        except ASMRuntimeError:
+                raise PrefixRuntimeError(f"Unknown identifier '{name}'", location=location, rewrite_rule="SIGNATURE")
+        except PrefixRuntimeError:
             raise
         except Exception as exc:
-            raise ASMRuntimeError(str(exc), location=location, rewrite_rule="SIGNATURE")
+            raise PrefixRuntimeError(str(exc), location=location, rewrite_rule="SIGNATURE")
 
         # Build function signature in the documented form:
         # FUNC name(T1:arg1, T2:arg2 = def, ...):R
@@ -2873,7 +2873,7 @@ class Builtins:
         # returns a same-typed Value wrapper; for TNS/MAP it returns a new
         # container with element references preserved.
         if len(args) != 1:
-            raise ASMRuntimeError("COPY expects one argument", location=location, rewrite_rule="COPY")
+            raise PrefixRuntimeError("COPY expects one argument", location=location, rewrite_rule="COPY")
         val = args[0]
         if val.type in (TYPE_INT, TYPE_FLT, TYPE_STR, TYPE_FUNC):
             return Value(val.type, val.value)
@@ -2892,7 +2892,7 @@ class Builtins:
             for k, v in m.data.items():
                 new_map.data[k] = v
             return Value(TYPE_MAP, new_map)
-        raise ASMRuntimeError("COPY: unsupported value type", location=location, rewrite_rule="COPY")
+        raise PrefixRuntimeError("COPY: unsupported value type", location=location, rewrite_rule="COPY")
 
     def _deep_copy_value(self, interpreter: "Interpreter", val: Value, location: SourceLocation) -> Value:
         # Helper for recursive deep-copy of Value objects
@@ -2911,7 +2911,7 @@ class Builtins:
             for k, v in m.data.items():
                 new_map.data[k] = self._deep_copy_value(interpreter, v, location)
             return Value(TYPE_MAP, new_map)
-        raise ASMRuntimeError("DEEPCOPY: unsupported value type", location=location, rewrite_rule="DEEPCOPY")
+        raise PrefixRuntimeError("DEEPCOPY: unsupported value type", location=location, rewrite_rule="DEEPCOPY")
 
     def _deepcopy(
         self,
@@ -2924,7 +2924,7 @@ class Builtins:
         # DEEPCOPY(ANY: obj):ANY -> recursively copy containers so elements
         # are freshly-copied as well.
         if len(args) != 1:
-            raise ASMRuntimeError("DEEPCOPY expects one argument", location=location, rewrite_rule="DEEPCOPY")
+            raise PrefixRuntimeError("DEEPCOPY expects one argument", location=location, rewrite_rule="DEEPCOPY")
         return self._deep_copy_value(interpreter, args[0], location)
 
     def _serialize(
@@ -2937,7 +2937,7 @@ class Builtins:
     ) -> Value:
         # SER(ANY: obj):STR -> JSON text representing typed value
         if len(args) != 1:
-            raise ASMRuntimeError("SER expects one argument", location=location, rewrite_rule="SER")
+            raise PrefixRuntimeError("SER expects one argument", location=location, rewrite_rule="SER")
 
         env_ids: Dict[int, str] = {}
         env_done: set[str] = set()
@@ -3174,7 +3174,7 @@ class Builtins:
                     elif kt == TYPE_STR:
                         key_ser = {"t": "STR", "v": kv}
                     else:
-                        raise ASMRuntimeError("SER: unsupported map key type", location=location, rewrite_rule="SER")
+                        raise PrefixRuntimeError("SER: unsupported map key type", location=location, rewrite_rule="SER")
                     items.append({"k": key_ser, "v": ser_val(vv)})
                 return {"t": "MAP", "v": items}
             if t == TYPE_FUNC:
@@ -3238,10 +3238,10 @@ class Builtins:
             body = ser_val(args[0])
             text = json.dumps(body, separators=(",", ":"))
             return Value(TYPE_STR, text)
-        except ASMRuntimeError:
+        except PrefixRuntimeError:
             raise
         except Exception as exc:
-            raise ASMRuntimeError(f"SER failed: {exc}", location=location, rewrite_rule="SER")
+            raise PrefixRuntimeError(f"SER failed: {exc}", location=location, rewrite_rule="SER")
 
     def _unserialize(
         self,
@@ -3253,7 +3253,7 @@ class Builtins:
     ) -> Value:
         # UNSER(STR: obj):ANY -> reverse of SER
         if len(args) != 1:
-            raise ASMRuntimeError("UNSER expects one argument", location=location, rewrite_rule="UNSER")
+            raise PrefixRuntimeError("UNSER expects one argument", location=location, rewrite_rule="UNSER")
         s = args[0]
         text = self._expect_str(s, "UNSER", location)
 
@@ -3276,7 +3276,7 @@ class Builtins:
             if obj is None:
                 return None
             if not isinstance(obj, dict) or "n" not in obj:
-                raise ASMRuntimeError("UNSER: invalid AST form", location=location, rewrite_rule="UNSER")
+                raise PrefixRuntimeError("UNSER: invalid AST form", location=location, rewrite_rule="UNSER")
             n = obj.get("n")
             if n == "Program":
                 loc = deser_loc(obj.get("loc"))
@@ -3484,16 +3484,16 @@ class Builtins:
                     target=cast(IndexExpression, deser_ast(obj.get("target"))),
                     value=cast(Expression, deser_ast(obj.get("value"))),
                 )
-            raise ASMRuntimeError("UNSER: unknown AST node", location=location, rewrite_rule="UNSER")
+            raise PrefixRuntimeError("UNSER: unknown AST node", location=location, rewrite_rule="UNSER")
 
         def deser_env(obj: Any) -> Optional[Environment]:
             if obj is None:
                 return None
             if not isinstance(obj, dict) or obj.get("t") != "ENV":
-                raise ASMRuntimeError("UNSER: invalid ENV", location=location, rewrite_rule="UNSER")
+                raise PrefixRuntimeError("UNSER: invalid ENV", location=location, rewrite_rule="UNSER")
             env_id = obj.get("id")
             if not isinstance(env_id, str):
-                raise ASMRuntimeError("UNSER: invalid ENV id", location=location, rewrite_rule="UNSER")
+                raise PrefixRuntimeError("UNSER: invalid ENV id", location=location, rewrite_rule="UNSER")
             existing_env = env_registry.get(env_id)
             if existing_env is not None:
                 return existing_env
@@ -3522,17 +3522,17 @@ class Builtins:
 
         def deser_val(obj) -> Value:
             if not isinstance(obj, dict) or "t" not in obj:
-                raise ASMRuntimeError("UNSER: invalid serialized form", location=location, rewrite_rule="UNSER")
+                raise PrefixRuntimeError("UNSER: invalid serialized form", location=location, rewrite_rule="UNSER")
             t = obj["t"]
             if t == "PTR":
                 name = obj.get("name")
                 env_obj = obj.get("env")
                 value_type = obj.get("value_type")
                 if not isinstance(name, str) or not isinstance(value_type, str):
-                    raise ASMRuntimeError("UNSER: invalid PTR", location=location, rewrite_rule="UNSER")
+                    raise PrefixRuntimeError("UNSER: invalid PTR", location=location, rewrite_rule="UNSER")
                 env = deser_env(env_obj)
                 if env is None:
-                    raise ASMRuntimeError("UNSER: invalid PTR env", location=location, rewrite_rule="UNSER")
+                    raise PrefixRuntimeError("UNSER: invalid PTR env", location=location, rewrite_rule="UNSER")
                 return Value(value_type, PointerRef(env=env, name=name))
             if t == "INT":
                 raw = obj.get("v", "0")
@@ -3552,7 +3552,7 @@ class Builtins:
                 try:
                     f = float(raw)
                 except Exception:
-                    raise ASMRuntimeError("UNSER: invalid FLT literal", location=location, rewrite_rule="UNSER")
+                    raise PrefixRuntimeError("UNSER: invalid FLT literal", location=location, rewrite_rule="UNSER")
                 return Value(TYPE_FLT, f)
             if t == "STR":
                 return Value(TYPE_STR, obj.get("v", ""))
@@ -3560,7 +3560,7 @@ class Builtins:
                 shape = obj.get("shape")
                 flat = obj.get("v", [])
                 if not isinstance(shape, list):
-                    raise ASMRuntimeError("UNSER: invalid TNS shape", location=location, rewrite_rule="UNSER")
+                    raise PrefixRuntimeError("UNSER: invalid TNS shape", location=location, rewrite_rule="UNSER")
                 vals = [deser_val(x) for x in flat]
                 arr = np.array(vals, dtype=object)
                 return Value(TYPE_TNS, Tensor(shape=list(shape), data=arr))
@@ -3568,7 +3568,7 @@ class Builtins:
             if t == "MAP":
                 raw_items = obj.get("v", [])
                 if not isinstance(raw_items, list):
-                    raise ASMRuntimeError("UNSER: invalid MAP form", location=location, rewrite_rule="UNSER")
+                    raise PrefixRuntimeError("UNSER: invalid MAP form", location=location, rewrite_rule="UNSER")
                 m = Map()
                 for pair in raw_items:
                     if not isinstance(pair, dict):
@@ -3578,7 +3578,7 @@ class Builtins:
                     # Key must deserialize to INT/FLT/STR
                     key_val = deser_val(kobj)
                     if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                        raise ASMRuntimeError("UNSER: invalid MAP key type", location=location, rewrite_rule="UNSER")
+                        raise PrefixRuntimeError("UNSER: invalid MAP key type", location=location, rewrite_rule="UNSER")
                     key = (key_val.type, key_val.value)
                     val = deser_val(vobj)
                     m.data[key] = val
@@ -3609,7 +3609,7 @@ class Builtins:
                             return node if isinstance(node, Expression) else None
                         try:
                             val = deser_val(raw_default)
-                        except ASMRuntimeError:
+                        except PrefixRuntimeError:
                             return None
                         if val.type in (TYPE_INT, TYPE_FLT, TYPE_STR):
                             return Literal(location=SourceLocation(file="<unser>", line=1, column=1, statement=""), value=val.value, literal_type=val.type)
@@ -3636,13 +3636,13 @@ class Builtins:
                         body_node = deser_ast(func_def.get("body"))
                         if isinstance(body_node, Block):
                             placeholder.body = body_node
-                    except ASMRuntimeError:
+                    except PrefixRuntimeError:
                         pass
                     try:
                         closure_env = deser_env(func_def.get("closure"))
                         if closure_env is not None:
                             placeholder.closure = closure_env
-                    except ASMRuntimeError:
+                    except PrefixRuntimeError:
                         pass
                     return Value(TYPE_FUNC, placeholder)
 
@@ -3673,7 +3673,7 @@ class Builtins:
                             if isinstance(raw_def, dict) and "n" in raw_def:
                                 try:
                                     default_expr = deser_ast(raw_def)
-                                except ASMRuntimeError:
+                                except PrefixRuntimeError:
                                     default_expr = None
                         params_fallback.append(Param(type=p_type, name=p_name, default=default_expr))
 
@@ -3713,11 +3713,11 @@ class Builtins:
                 env_val: Optional[Environment] = None
                 try:
                     block = deser_ast(obj.get("block"))
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     block = None
                 try:
                     env_val = deser_env(obj.get("env"))
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     env_val = None
                 ctrl = {
                     "thread": _DummyThread(),
@@ -3736,12 +3736,12 @@ class Builtins:
                     interpreter._ser_thr_ids[id(ctrl)] = thr_id
                 return Value(TYPE_THR, ctrl)
             # Unknown type: cannot reconstruct
-            raise ASMRuntimeError(f"UNSER: cannot reconstruct type {t}", location=location, rewrite_rule="UNSER")
+            raise PrefixRuntimeError(f"UNSER: cannot reconstruct type {t}", location=location, rewrite_rule="UNSER")
 
         try:
             obj = json.loads(text)
         except Exception:
-            raise ASMRuntimeError("UNSER: invalid JSON", location=location, rewrite_rule="UNSER")
+            raise PrefixRuntimeError("UNSER: invalid JSON", location=location, rewrite_rule="UNSER")
         return deser_val(obj)
 
     def _frozen(
@@ -3754,7 +3754,7 @@ class Builtins:
     ) -> Value:
         # Expect an identifier node so we examine whether the symbol is frozen
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("FROZEN requires an identifier argument", location=location, rewrite_rule="FROZEN")
+            raise PrefixRuntimeError("FROZEN requires an identifier argument", location=location, rewrite_rule="FROZEN")
         name = arg_nodes[0].name
         env_found = env._find_env(name)
         if env_found is None:
@@ -3774,7 +3774,7 @@ class Builtins:
     ) -> Value:
         # Expect an identifier node so we examine whether the symbol is perma-frozen
         if not arg_nodes or not isinstance(arg_nodes[0], Identifier):
-            raise ASMRuntimeError("PERMAFROZEN requires an identifier argument", location=location, rewrite_rule="PERMAFROZEN")
+            raise PrefixRuntimeError("PERMAFROZEN requires an identifier argument", location=location, rewrite_rule="PERMAFROZEN")
         name = arg_nodes[0].name
         env_found = env._find_env(name)
         if env_found is None:
@@ -3799,7 +3799,7 @@ class Builtins:
                 with open(path, "rb") as handle:
                     raw = handle.read()
             except OSError as exc:
-                raise ASMRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
+                raise PrefixRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
 
             if coding == "binary":
                 text = "".join(f"{byte:08b}" for byte in raw)
@@ -3814,7 +3814,7 @@ class Builtins:
             with open(path, "r", encoding=encoding, errors="replace") as handle:
                 data = handle.read()
         except OSError as exc:
-            raise ASMRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
+            raise PrefixRuntimeError(f"Failed to read '{path}': {exc}", location=location, rewrite_rule="READFILE")
         return Value(TYPE_STR, data)
 
     def _writefile(
@@ -3835,9 +3835,9 @@ class Builtins:
             if coding == "binary":
                 cleaned = "".join(ch for ch in blob if not ch.isspace())
                 if any(ch not in "01" for ch in cleaned):
-                    raise ASMRuntimeError("WRITEFILE(binary) expects only 0/1 characters", location=location, rewrite_rule="WRITEFILE")
+                    raise PrefixRuntimeError("WRITEFILE(binary) expects only 0/1 characters", location=location, rewrite_rule="WRITEFILE")
                 if len(cleaned) % 8 != 0:
-                    raise ASMRuntimeError("WRITEFILE(binary) requires bitstrings in multiples of 8 bits", location=location, rewrite_rule="WRITEFILE")
+                    raise PrefixRuntimeError("WRITEFILE(binary) requires bitstrings in multiples of 8 bits", location=location, rewrite_rule="WRITEFILE")
                 out_bytes = bytes(int(cleaned[i : i + 8], 2) for i in range(0, len(cleaned), 8))
                 with open(path, "wb") as handle:
                     handle.write(out_bytes)
@@ -3845,7 +3845,7 @@ class Builtins:
                 try:
                     out_bytes = bytes.fromhex(blob)
                 except ValueError as exc:
-                    raise ASMRuntimeError(f"WRITEFILE(hex) could not parse hex: {exc}", location=location, rewrite_rule="WRITEFILE")
+                    raise PrefixRuntimeError(f"WRITEFILE(hex) could not parse hex: {exc}", location=location, rewrite_rule="WRITEFILE")
                 with open(path, "wb") as handle:
                     handle.write(out_bytes)
             else:
@@ -3870,17 +3870,17 @@ class Builtins:
     ) -> Value:
         number = self._expect_int(args[0], "BYTES", location)
         if number < 0:
-            raise ASMRuntimeError("BYTES expects a non-negative integer", location=location, rewrite_rule="BYTES")
+            raise PrefixRuntimeError("BYTES expects a non-negative integer", location=location, rewrite_rule="BYTES")
         # Optional endian argument: default is big-endian
         endian = "big"
         if len(args) >= 2:
             endian_val = args[1]
             if endian_val.type != TYPE_STR:
-                raise ASMRuntimeError("BYTES expects string endian argument", location=location, rewrite_rule="BYTES")
+                raise PrefixRuntimeError("BYTES expects string endian argument", location=location, rewrite_rule="BYTES")
             endian = str(endian_val.value).strip().lower()
         # Validate endian
         if endian not in {"big", "little"}:
-            raise ASMRuntimeError("BYTES endian must be 'big' or 'little'", location=location, rewrite_rule="BYTES")
+            raise PrefixRuntimeError("BYTES endian must be 'big' or 'little'", location=location, rewrite_rule="BYTES")
 
         if number == 0:
             data = np.array([Value(TYPE_INT, 0)], dtype=object)
@@ -3920,32 +3920,32 @@ class Builtins:
         path = self._expect_str(args[0], "DELETEFILE", location)
         # If the path does not exist, signal an explicit runtime error.
         if not os.path.exists(path):
-            raise ASMRuntimeError(f"DELETEFILE: '{path}' does not exist", location=location, rewrite_rule="DELETEFILE")
+            raise PrefixRuntimeError(f"DELETEFILE: '{path}' does not exist", location=location, rewrite_rule="DELETEFILE")
         try:
             # Attempt to remove the filesystem object. Use os.remove to
             # fail on directories; caller must ensure target is a file.
             os.remove(path)
         except OSError as exc:
-            raise ASMRuntimeError(f"Failed to delete '{path}': {exc}", location=location, rewrite_rule="DELETEFILE")
+            raise PrefixRuntimeError(f"Failed to delete '{path}': {exc}", location=location, rewrite_rule="DELETEFILE")
         return Value(TYPE_INT, 1)
 
     # Tensor helpers
     def _shape_from_tensor(self, tensor: Tensor, rule: str, location: SourceLocation) -> List[int]:
         if len(tensor.shape) != 1:
-            raise ASMRuntimeError(f"{rule} shape must be a 1D tensor", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} shape must be a 1D tensor", location=location, rewrite_rule=rule)
         dims: List[int] = []
         for entry in tensor.data.flat:
             dim = self._expect_int(entry, rule, location)
             if dim <= 0:
-                raise ASMRuntimeError("Tensor dimensions must be positive", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError("Tensor dimensions must be positive", location=location, rewrite_rule=rule)
             dims.append(dim)
         if not dims:
-            raise ASMRuntimeError("Tensor shape must have at least one dimension", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Tensor shape must have at least one dimension", location=location, rewrite_rule=rule)
         return dims
 
     def _map_tensor_int_binary(self, x: Tensor, y: Tensor, rule: str, location: SourceLocation, op: Callable[[int, int], int]) -> Tensor:
         if x.shape != y.shape:
-            raise ASMRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
         # Use ravel() and indexed loop to avoid per-iteration tuple allocation
         x_flat = x.data.ravel()
         y_flat = y.data.ravel()
@@ -3955,13 +3955,13 @@ class Builtins:
         if n == 0:
             return Tensor(shape=list(x.shape), data=np.array([], dtype=object))
         if x_flat[0].type != TYPE_INT:
-            raise ASMRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
         for v in x_flat:
             if v.type != TYPE_INT:
-                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
         for v in y_flat:
             if v.type != TYPE_INT:
-                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
         for i in range(n):
             a = int(x_flat[i].value)
             b = int(y_flat[i].value)
@@ -3978,7 +3978,7 @@ class Builtins:
         op_flt: Callable[[float, float], float],
     ) -> Tensor:
         if x.shape != y.shape:
-            raise ASMRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} requires tensors with identical shapes", location=location, rewrite_rule=rule)
         if x.data.size == 0:
             # Shapes are validated elsewhere to be positive, but keep safe.
             return Tensor(shape=list(x.shape), data=np.array([], dtype=object))
@@ -3987,14 +3987,14 @@ class Builtins:
         y_flat = y.data.ravel()
         first_type = x_flat[0].type
         if first_type not in (TYPE_INT, TYPE_FLT):
-            raise ASMRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
         # Validate uniform element types in both tensors
         for v in x_flat:
             if v.type != first_type:
-                raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
         for v in y_flat:
             if v.type != first_type:
-                raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
 
         n = x_flat.size
         out = np.empty(n, dtype=object)
@@ -4002,10 +4002,10 @@ class Builtins:
             # Validate and then access int values directly to avoid repeated checks
             for v in x_flat:
                 if v.type != TYPE_INT:
-                    raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+                    raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
             for v in y_flat:
                 if v.type != TYPE_INT:
-                    raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+                    raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
             for i in range(n):
                 a = int(x_flat[i].value)
                 b = int(y_flat[i].value)
@@ -4026,10 +4026,10 @@ class Builtins:
         if n == 0:
             return Tensor(shape=list(tensor.shape), data=np.array([], dtype=object))
         if flat[0].type != TYPE_INT:
-            raise ASMRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects INT tensor elements", location=location, rewrite_rule=rule)
         for v in flat:
             if v.type != TYPE_INT:
-                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
         for i in range(n):
             entry = int(flat[i].value)
             out[i] = Value(TYPE_INT, op(entry, scalar))
@@ -4049,12 +4049,12 @@ class Builtins:
         flat = tensor.data.ravel()
         first_type = flat[0].type
         if first_type not in (TYPE_INT, TYPE_FLT):
-            raise ASMRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects INT or FLT tensor elements", location=location, rewrite_rule=rule)
         if scalar.type != first_type:
-            raise ASMRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} cannot mix INT and FLT", location=location, rewrite_rule=rule)
         for v in flat:
             if v.type != first_type:
-                raise ASMRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError(f"{rule} tensor has mixed element types", location=location, rewrite_rule=rule)
 
         n = flat.size
         out = np.empty(n, dtype=object)
@@ -4098,7 +4098,7 @@ class Builtins:
         tensor = self._expect_tns(args[0], "TLEN", location)
         dim_index = self._expect_int(args[1], "TLEN", location)
         if dim_index <= 0 or dim_index > len(tensor.shape):
-            raise ASMRuntimeError("TLEN dimension out of range", location=location, rewrite_rule="TLEN")
+            raise PrefixRuntimeError("TLEN dimension out of range", location=location, rewrite_rule="TLEN")
         return Value(TYPE_INT, tensor.shape[dim_index - 1])
 
     def _fill(
@@ -4112,7 +4112,7 @@ class Builtins:
         tensor = self._expect_tns(args[0], "FILL", location)
         fill_value = args[1]
         if any(entry.type != fill_value.type for entry in tensor.data.flat):
-            raise ASMRuntimeError("FILL value type must match existing tensor element types", location=location, rewrite_rule="FILL")
+            raise PrefixRuntimeError("FILL value type must match existing tensor element types", location=location, rewrite_rule="FILL")
         new_data = np.empty(tensor.data.size, dtype=object)
         for i in range(tensor.data.size):
             new_data[i] = Value(fill_value.type, fill_value.value)
@@ -4141,7 +4141,7 @@ class Builtins:
         shape_val = self._expect_tns(first, "TNS", location)
         shape = self._shape_from_tensor(shape_val, "TNS", location)
         if len(args) < 2:
-            raise ASMRuntimeError("TNS expects a fill value when called with a shape", location=location, rewrite_rule="TNS")
+            raise PrefixRuntimeError("TNS expects a fill value when called with a shape", location=location, rewrite_rule="TNS")
         fill_value = args[1]
         tensor = interpreter._make_tensor_from_shape(shape, fill_value, "TNS", location)
         return Value(TYPE_TNS, tensor)
@@ -4200,7 +4200,7 @@ class Builtins:
 
         def _div_flt(a: float, b: float) -> float:
             if b == 0.0:
-                raise ASMRuntimeError("Division by zero", rewrite_rule="MDIV", location=location)
+                raise PrefixRuntimeError("Division by zero", rewrite_rule="MDIV", location=location)
             return a / b
 
         tensor = self._map_tensor_numeric_binary(x, y, "MDIV", location, _div_int, _div_flt)
@@ -4275,7 +4275,7 @@ class Builtins:
 
         def _div_flt(val: float, sc: float) -> float:
             if sc == 0.0:
-                raise ASMRuntimeError("Division by zero", rewrite_rule="TDIV", location=location)
+                raise PrefixRuntimeError("Division by zero", rewrite_rule="TDIV", location=location)
             return val / sc
 
         result = self._map_tensor_numeric_scalar(tensor, scalar, "TDIV", location, _div_int, _div_flt)
@@ -4325,7 +4325,7 @@ class Builtins:
         if val.type == TYPE_STR:
             s = self._expect_str(val, "FLIP", location)
             return Value(TYPE_STR, s[::-1])
-        raise ASMRuntimeError("FLIP expects INT or STR", location=location, rewrite_rule="FLIP")
+        raise PrefixRuntimeError("FLIP expects INT or STR", location=location, rewrite_rule="FLIP")
 
     def _tflip(
         self,
@@ -4341,7 +4341,7 @@ class Builtins:
         tensor = self._expect_tns(args[0], "TFLIP", location)
         dim = self._expect_int(args[1], "TFLIP", location)
         if dim <= 0 or dim > len(tensor.shape):
-            raise ASMRuntimeError("TFLIP dimension out of range", location=location, rewrite_rule="TFLIP")
+            raise PrefixRuntimeError("TFLIP dimension out of range", location=location, rewrite_rule="TFLIP")
         axis = dim - 1
         # reshape the flat data into the tensor shape, flip along axis, then flatten
         reshaped = tensor.data.reshape(tuple(tensor.shape))
@@ -4372,8 +4372,8 @@ class Builtins:
             entry = flat[i]
             try:
                 converted = self._int_op(interpreter, [entry], [], env, location)
-            except ASMRuntimeError as e:
-                raise ASMRuntimeError(f"TINT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TINT")
+            except PrefixRuntimeError as e:
+                raise PrefixRuntimeError(f"TINT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TINT")
             out[i] = converted
         return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
 
@@ -4399,8 +4399,8 @@ class Builtins:
             entry = flat[i]
             try:
                 converted = self._flt_op(interpreter, [entry], [], env, location)
-            except ASMRuntimeError as e:
-                raise ASMRuntimeError(f"TFLT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TFLT")
+            except PrefixRuntimeError as e:
+                raise PrefixRuntimeError(f"TFLT: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TFLT")
             out[i] = converted
         return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
 
@@ -4426,8 +4426,8 @@ class Builtins:
             entry = flat[i]
             try:
                 converted = self._str_op(interpreter, [entry], [], env, location)
-            except ASMRuntimeError as e:
-                raise ASMRuntimeError(f"TSTR: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TSTR")
+            except PrefixRuntimeError as e:
+                raise PrefixRuntimeError(f"TSTR: cannot convert tensor element: {e.message}", location=location, rewrite_rule="TSTR")
             out[i] = converted
         return Value(TYPE_TNS, Tensor(shape=list(tensor.shape), data=out))
 
@@ -4451,9 +4451,9 @@ class Builtins:
 
         rank = len(dst.shape)
         if len(src.shape) != rank:
-            raise ASMRuntimeError("SCAT requires src and dst to have the same rank", location=location, rewrite_rule="SCAT")
+            raise PrefixRuntimeError("SCAT requires src and dst to have the same rank", location=location, rewrite_rule="SCAT")
         if len(ind.shape) != 2 or ind.shape[0] != rank or ind.shape[1] != 2:
-            raise ASMRuntimeError("SCAT indices must have shape [rank, 2]", location=location, rewrite_rule="SCAT")
+            raise PrefixRuntimeError("SCAT indices must have shape [rank, 2]", location=location, rewrite_rule="SCAT")
 
         pairs = ind.data.reshape((ind.shape[0], ind.shape[1]))
         slices: List[Tuple[int, int]] = []
@@ -4465,10 +4465,10 @@ class Builtins:
             lo = interpreter._resolve_tensor_index(lo_raw, dim_len, "SCAT", location)
             hi = interpreter._resolve_tensor_index(hi_raw, dim_len, "SCAT", location)
             if lo > hi:
-                raise ASMRuntimeError("SCAT expects lo <= hi for each dimension", location=location, rewrite_rule="SCAT")
+                raise PrefixRuntimeError("SCAT expects lo <= hi for each dimension", location=location, rewrite_rule="SCAT")
             span = hi - lo + 1
             if span != src.shape[axis]:
-                raise ASMRuntimeError("SCAT source shape must match index span", location=location, rewrite_rule="SCAT")
+                raise PrefixRuntimeError("SCAT source shape must match index span", location=location, rewrite_rule="SCAT")
             slices.append((lo - 1, hi))
 
         out_data = dst.data.copy()
@@ -4490,7 +4490,7 @@ class Builtins:
         Execute each element of the `functions` tensor in parallel. Each
         element must be a `FUNC` value. Wait for all to complete and return
         integer 0 on success. If any element is not a function or any
-        invocation raises, an ASMRuntimeError is raised.
+        invocation raises, an PrefixRuntimeError is raised.
         """
         # Support two forms:
         #  - PARALLEL(TNS: functions)
@@ -4511,7 +4511,7 @@ class Builtins:
         def worker(idx: int, elem: Any) -> None:
             try:
                 if not isinstance(elem, Value) or elem.type != TYPE_FUNC:
-                    raise ASMRuntimeError("PARALLEL expects functions (either a tensor of FUNC or FUNC arguments)", location=location, rewrite_rule="PARALLEL")
+                    raise PrefixRuntimeError("PARALLEL expects functions (either a tensor of FUNC or FUNC arguments)", location=location, rewrite_rule="PARALLEL")
                 func = elem.value
                 # Invoke with no args and the provided environment as closure
                 res = interpreter._invoke_function_object(func, [], {}, location, ___)
@@ -4531,9 +4531,9 @@ class Builtins:
         # Propagate first error if any
         for err in errors:
             if err is not None:
-                if isinstance(err, ASMRuntimeError):
+                if isinstance(err, PrefixRuntimeError):
                     raise err
-                raise ASMRuntimeError(f"PARALLEL worker failed: {err}", location=location, rewrite_rule="PARALLEL")
+                raise PrefixRuntimeError(f"PARALLEL worker failed: {err}", location=location, rewrite_rule="PARALLEL")
 
         return Value(TYPE_INT, 0)
 
@@ -4552,7 +4552,7 @@ class Builtins:
         matching the 2D helper (`stride_w`, `stride_h`, `pad_w`, `pad_h`,
         `bias`) and when the input is a 3-D WHC tensor and the kernel is a
         4-D tensor `[kw,kh,in_c,out_c]`, perform a multi-output 2D
-        convolution with optional stride/padding/bias similar to lib/cnn.asmln
+        convolution with optional stride/padding/bias similar to lib/cnn.pre
         `CONV2D`.
         """
 
@@ -4587,7 +4587,7 @@ class Builtins:
                 elif name == "bias":
                     bias_val = val
                 else:
-                    raise ASMRuntimeError(f"CONV: unknown keyword argument '{name}'", location=location, rewrite_rule="CONV")
+                    raise PrefixRuntimeError(f"CONV: unknown keyword argument '{name}'", location=location, rewrite_rule="CONV")
 
         # If caller provided CONV2D-style kwargs and this looks like a WHC
         # input with a 4-D kernel [kw,kh,in_c,out_c], call the multi-output
@@ -4597,17 +4597,17 @@ class Builtins:
             in_w, in_h, in_c = x.shape
             kw, kh, k_in_c, out_c = kernel.shape
             if k_in_c != in_c:
-                raise ASMRuntimeError("CONV kernel input channels do not match input tensor channels", location=location, rewrite_rule="CONV")
+                raise PrefixRuntimeError("CONV kernel input channels do not match input tensor channels", location=location, rewrite_rule="CONV")
 
             # Determine numeric output type
             def _uniform_numeric_type(t: Tensor, which: str) -> str:
                 if t.data.size == 0:
-                    raise ASMRuntimeError(f"CONV does not support empty {which} tensors", location=location, rewrite_rule="CONV")
+                    raise PrefixRuntimeError(f"CONV does not support empty {which} tensors", location=location, rewrite_rule="CONV")
                 first = next(iter(t.data.flat)).type
                 if first not in (TYPE_INT, TYPE_FLT):
-                    raise ASMRuntimeError("CONV expects INT or FLT tensor elements", location=location, rewrite_rule="CONV")
+                    raise PrefixRuntimeError("CONV expects INT or FLT tensor elements", location=location, rewrite_rule="CONV")
                 if any(v.type != first for v in t.data.flat):
-                    raise ASMRuntimeError("CONV does not allow mixed element types within a tensor", location=location, rewrite_rule="CONV")
+                    raise PrefixRuntimeError("CONV does not allow mixed element types within a tensor", location=location, rewrite_rule="CONV")
                 return first
 
             x_type = _uniform_numeric_type(x, "input")
@@ -4621,12 +4621,12 @@ class Builtins:
             out_w = ( (p_w - kw) // stride_w ) + 1
             out_h = ( (p_h - kh) // stride_h ) + 1
             if out_w < 1 or out_h < 1:
-                raise ASMRuntimeError("CONV produced non-positive output dimensions", location=location, rewrite_rule="CONV")
+                raise PrefixRuntimeError("CONV produced non-positive output dimensions", location=location, rewrite_rule="CONV")
 
             # Prepare padded input array (object dtype of Values)
             x_arr = x.data.reshape(tuple(x.shape))
             padded = np.empty((p_w, p_h, in_c), dtype=object)
-            # Fill with zero pad (match lib/cnn.asmln PAD2D behavior used there)
+            # Fill with zero pad (match lib/cnn.pre PAD2D behavior used there)
             pad_zero = Value(TYPE_INT, 0) if out_type == TYPE_INT else Value(TYPE_FLT, 0.0)
             for px in range(p_w):
                 for py in range(p_h):
@@ -4693,13 +4693,13 @@ class Builtins:
         # odd kernel dims, same-shape output). This is the original path
         # (unchanged).
         if len(x.shape) != len(kernel.shape):
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 "CONV requires input and kernel tensors with the same rank",
                 location=location,
                 rewrite_rule="CONV",
             )
         if any((d % 2) == 0 for d in kernel.shape):
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 "CONV requires odd kernel dimensions",
                 location=location,
                 rewrite_rule="CONV",
@@ -4707,20 +4707,20 @@ class Builtins:
 
         def _check_uniform_type(t: Tensor, which: str) -> str:
             if t.data.size == 0:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"CONV does not support empty {which} tensors",
                     location=location,
                     rewrite_rule="CONV",
                 )
             first = next(iter(t.data.flat)).type
             if first not in (TYPE_INT, TYPE_FLT):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "CONV expects INT or FLT tensor elements",
                     location=location,
                     rewrite_rule="CONV",
                 )
             if any(v.type != first for v in t.data.flat):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     "CONV does not allow mixed element types within a tensor",
                     location=location,
                     rewrite_rule="CONV",
@@ -4865,7 +4865,7 @@ class Builtins:
             out = completed.stdout or ""
             err = completed.stderr or ""
         except OSError as exc:
-            raise ASMRuntimeError(f"CL failed: {exc}", location=location, rewrite_rule="CL")
+            raise PrefixRuntimeError(f"CL failed: {exc}", location=location, rewrite_rule="CL")
         finally:
             if cleanup_script:
                 try:
@@ -4934,7 +4934,7 @@ class Builtins:
     def _resolve_thr_from_value(self, interpreter: "Interpreter", val: Value, rule: str, location: SourceLocation) -> Dict[str, Any]:
         val = interpreter._deref_value(val, location=location, rule=rule)
         if val.type != TYPE_THR:
-            raise ASMRuntimeError(f"{rule} expects THR value", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects THR value", location=location, rewrite_rule=rule)
         ctrl = val.value
         return ctrl
 
@@ -4942,7 +4942,7 @@ class Builtins:
         ctrl = self._resolve_thr_from_value(interpreter, args[0], "STOP", location)
         thr = ctrl.get("thread")
         if thr is None:
-            raise ASMRuntimeError("Invalid THR", location=location, rewrite_rule="STOP")
+            raise PrefixRuntimeError("Invalid THR", location=location, rewrite_rule="STOP")
         # Cooperative stop: mark as stopping/stopped and allow worker to exit at
         # the next statement boundary.
         ctrl["stop"] = True
@@ -4959,7 +4959,7 @@ class Builtins:
         ctrl = self._resolve_thr_from_value(interpreter, args[0], "AWAIT", location)
         thr = ctrl.get("thread")
         if thr is None:
-            raise ASMRuntimeError("Invalid THR", location=location, rewrite_rule="AWAIT")
+            raise PrefixRuntimeError("Invalid THR", location=location, rewrite_rule="AWAIT")
         thr.join()
         return Value(TYPE_THR, ctrl)
 
@@ -4969,7 +4969,7 @@ class Builtins:
         if len(args) > 1:
             seconds = self._expect_flt(args[1], "PAUSE", location)
         if ctrl.get("paused"):
-            raise ASMRuntimeError("Thread already paused", location=location, rewrite_rule="PAUSE")
+            raise PrefixRuntimeError("Thread already paused", location=location, rewrite_rule="PAUSE")
         # Mark paused; threads need to check pause_event to actually pause.
         ctrl["paused"] = True
         ctrl["pause_event"].clear()
@@ -4987,7 +4987,7 @@ class Builtins:
     def _resume_thr(self, interpreter: "Interpreter", args: List[Value], __: List[Expression], ___: Environment, location: SourceLocation) -> Value:
         ctrl = self._resolve_thr_from_value(interpreter, args[0], "RESUME", location)
         if not ctrl.get("paused"):
-            raise ASMRuntimeError("Thread is not paused", location=location, rewrite_rule="RESUME")
+            raise PrefixRuntimeError("Thread is not paused", location=location, rewrite_rule="RESUME")
         ctrl["paused"] = False
         ctrl["pause_event"].set()
         ctrl["state"] = "running"
@@ -5003,7 +5003,7 @@ class Builtins:
         env = ctrl.get("env")
         block = ctrl.get("block")
         if env is None or block is None:
-            raise ASMRuntimeError("Cannot restart THR", location=location, rewrite_rule="RESTART")
+            raise PrefixRuntimeError("Cannot restart THR", location=location, rewrite_rule="RESTART")
         # Reset finished flag and spawn new thread
         ctrl["stop"] = False
         ctrl["paused"] = False
@@ -5289,10 +5289,10 @@ class Interpreter:
     def _expect_func(self, value: "Value", rule: str, location: SourceLocation) -> Function:
         value = self._deref_value(value, location=location, rule=rule)
         if value.type != TYPE_FUNC:
-            raise ASMRuntimeError(f"{rule} expects function value", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} expects function value", location=location, rewrite_rule=rule)
         func_obj = value.value
         if not isinstance(func_obj, Function):
-            raise ASMRuntimeError("Invalid function value", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Invalid function value", location=location, rewrite_rule=rule)
         return func_obj
 
     # ---- Pointer helpers ----
@@ -5305,7 +5305,7 @@ class Interpreter:
         while True:
             target_val = current_env.get_optional(current_name)
             if target_val is None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Pointer target '{current_name}' is undefined",
                     location=location,
                     rewrite_rule=rule,
@@ -5314,7 +5314,7 @@ class Interpreter:
                 return current_env, current_name, target_val
             hops += 1
             if hops > 128:
-                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule)
             ptr = target_val.value
             current_env = ptr.env
             current_name = ptr.name
@@ -5322,7 +5322,7 @@ class Interpreter:
     def _make_pointer_value(self, name: str, env: Environment, location: SourceLocation) -> Value:
         target_env = env._find_env(name)
         if target_env is None:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Pointer target '{name}' is undefined",
                 location=location,
                 rewrite_rule="POINTER",
@@ -5332,13 +5332,13 @@ class Interpreter:
         # identifiers may remain frozen, but no new aliasing may be created
         # until the identifier is thawed.
         if name in target_env.frozen and name not in target_env.permafrozen:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Cannot create pointer to frozen identifier '{name}'",
                 location=location,
                 rewrite_rule="POINTER",
             )
         elif name in target_env.permafrozen:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Cannot create pointer to permanently-frozen identifier '{name}'",
                 location=location,
                 rewrite_rule="POINTER",
@@ -5358,11 +5358,11 @@ class Interpreter:
         while isinstance(current.value, PointerRef):
             hops += 1
             if hops > 128:
-                raise ASMRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule or "POINTER")
+                raise PrefixRuntimeError("Pointer cycle detected", location=location, rewrite_rule=rule or "POINTER")
             ptr = current.value
             target_val = ptr.env.get_optional(ptr.name)
             if target_val is None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Pointer target '{ptr.name}' is undefined",
                     location=location,
                     rewrite_rule=rule or "POINTER",
@@ -5373,7 +5373,7 @@ class Interpreter:
     def _assign_index(self, target: IndexExpression, new_value: Value, env: Environment, location: SourceLocation) -> None:
         base_expr, index_nodes, index_flags = self._gather_index_chain(target)
         if type(base_expr) is not Identifier:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 "Indexed assignment requires identifier base",
                 location=location,
                 rewrite_rule="ASSIGN",
@@ -5382,7 +5382,7 @@ class Interpreter:
         # Respect identifier freezing: element assignment is still a form of reassignment.
         env_found = env._find_env(base_expr.name)
         if env_found is not None and (base_expr.name in env_found.frozen or base_expr.name in env_found.permafrozen):
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Identifier '{base_expr.name}' is frozen and cannot be reassigned",
                 location=location,
                 rewrite_rule="ASSIGN",
@@ -5396,7 +5396,7 @@ class Interpreter:
         # before performing the assignment.
 
         if not index_nodes:
-            raise ASMRuntimeError("Indexed assignment requires at least one index", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Indexed assignment requires at least one index", location=location, rewrite_rule="ASSIGN")
 
         current_val = base_val
         i = 0
@@ -5422,12 +5422,12 @@ class Interpreter:
             if not is_map:
                 # Process tensor-style indices
                 if current_val.type != TYPE_TNS:
-                    raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=location, rewrite_rule="ASSIGN")
+                    raise PrefixRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=location, rewrite_rule="ASSIGN")
                 current_val = self._index_tensor(current_val, group_nodes, env, location)
             else:
                 # Process map-style indices
                 if current_val.type != TYPE_MAP:
-                    raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=location, rewrite_rule="ASSIGN")
+                    raise PrefixRuntimeError("Cannot use map-style '<...>' to index a non-map", location=location, rewrite_rule="ASSIGN")
                 current_val = self._index_map(current_val, group_nodes, env, location)
 
             i = j
@@ -5438,14 +5438,14 @@ class Interpreter:
         if last_is_map:
             # Map assignment: traverse/create nested maps for all but the final key
             if current_val.type != TYPE_MAP:
-                raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=location, rewrite_rule="ASSIGN")
+                raise PrefixRuntimeError("Cannot use map-style '<...>' to index a non-map", location=location, rewrite_rule="ASSIGN")
             assert isinstance(current_val.value, Map)
             eval_expr = self._evaluate_expression
             current_map_val = current_val
             for idx_node in last_indices[:-1]:
                 key_val = eval_expr(idx_node, env)
                 if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                    raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="ASSIGN")
+                    raise PrefixRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="ASSIGN")
                 key = (key_val.type, key_val.value)
                 # If key absent, create nested map
                 if key not in current_map_val.value.data:
@@ -5453,17 +5453,17 @@ class Interpreter:
                     current_map_val.value.data[key] = Value(TYPE_MAP, new_map)
                 next_val = current_map_val.value.data[key]
                 if next_val.type != TYPE_MAP:
-                    raise ASMRuntimeError("Cannot index into non-map value", location=location, rewrite_rule="ASSIGN")
+                    raise PrefixRuntimeError("Cannot index into non-map value", location=location, rewrite_rule="ASSIGN")
                 current_map_val = next_val
             # Final key
             final_key_node = last_indices[-1]
             final_key_val = eval_expr(final_key_node, env)
             if final_key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="ASSIGN")
+                raise PrefixRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="ASSIGN")
             final_key = (final_key_val.type, final_key_val.value)
             existing = current_map_val.value.data.get(final_key)
             if existing is not None and existing.type != new_value.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Type mismatch for map key assignment: existing {existing.type} vs new {new_value.type}",
                     location=location,
                     rewrite_rule="ASSIGN",
@@ -5473,7 +5473,7 @@ class Interpreter:
 
         # Tensor assignment
         if current_val.type != TYPE_TNS:
-            raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=location, rewrite_rule="ASSIGN")
         assert isinstance(current_val.value, Tensor)
         eval_expr = self._evaluate_expression
         expect_int = self._expect_int
@@ -5506,13 +5506,13 @@ class Interpreter:
                 indexers.append(idx_res - 1)
 
         if new_value.type != TYPE_TNS:
-            raise ASMRuntimeError("Slice assignment requires tensor RHS", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Slice assignment requires tensor RHS", location=location, rewrite_rule="ASSIGN")
         assert isinstance(new_value.value, Tensor)
         rhs_arr = new_value.value.data.reshape(tuple(new_value.value.shape))
         try:
             arr[cast(Any, tuple(indexers))] = rhs_arr
         except (ValueError, IndexError, RuntimeError) as exc:
-            raise ASMRuntimeError(f"Slice assignment failed: {exc}", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError(f"Slice assignment failed: {exc}", location=location, rewrite_rule="ASSIGN")
         return
 
     def _assign_pointer_target(
@@ -5520,7 +5520,7 @@ class Interpreter:
     ) -> None:
         try:
             ptr.env.set(ptr.name, new_value)
-        except ASMRuntimeError as err:
+        except PrefixRuntimeError as err:
             if err.location is None:
                 err.location = location
             if err.rewrite_rule is None:
@@ -5541,23 +5541,23 @@ class Interpreter:
         try:
             self._execute_block(program.statements, global_env)
         except BreakSignal as bs:
-            raise ASMRuntimeError(f"BREAK({bs.count}) escaped enclosing loops", rewrite_rule="BREAK")
+            raise PrefixRuntimeError(f"BREAK({bs.count}) escaped enclosing loops", rewrite_rule="BREAK")
         except ContinueSignal:
-            raise ASMRuntimeError("CONTINUE used outside loop", rewrite_rule="CONTINUE")
-        except ASMRuntimeError as error:
+            raise PrefixRuntimeError("CONTINUE used outside loop", rewrite_rule="CONTINUE")
+        except PrefixRuntimeError as error:
             self._emit_event("on_error", self, error)
             if self.logger.entries:
                 error.step_index = self.logger.entries[-1].step_index
             raise
         except Exception as exc:
             self._emit_event("on_error", self, exc)
-            # Convert unexpected Python-level exceptions into ASMRuntimeError
-            # so callers (REPL/CLI) can format them using ASM-Lang tracebacks.
+            # Convert unexpected Python-level exceptions into PrefixRuntimeError
+            # so callers (REPL/CLI) can format them using Prefix-Lang tracebacks.
             loc = None
             if self.logger.entries:
                 last = self.logger.entries[-1]
                 loc = last.source_location
-            wrapped = ASMRuntimeError(f"Internal interpreter error: {exc}", location=loc, rewrite_rule="internal")
+            wrapped = PrefixRuntimeError(f"Internal interpreter error: {exc}", location=loc, rewrite_rule="internal")
             if self.logger.entries:
                 wrapped.step_index = self.logger.entries[-1].step_index
             raise wrapped
@@ -5598,7 +5598,7 @@ class Interpreter:
                 log_step(rule=statement.__class__.__name__, location=statement.location)
                 try:
                     self._execute_block(statement.try_block.statements, env)
-                except ASMRuntimeError as err:
+                except PrefixRuntimeError as err:
                     # Optionally bind symbol and run catch block
                     if statement.catch_symbol is not None:
                         name = statement.catch_symbol
@@ -5624,13 +5624,13 @@ class Interpreter:
                                     # Remove the shadow binding from the current env
                                     if name in env.values:
                                         del env.values[name]
-                            except ASMRuntimeError:
+                            except PrefixRuntimeError:
                                 raise
                     else:
                         # No symbol to bind: run catch block without binding
                         self._execute_block(statement.catch_block.statements, env)
                 except Exception as exc:
-                    # Non-ASMRuntimeError should propagate as usual
+                    # Non-PrefixRuntimeError should propagate as usual
                     raise
                 i += 1
                 emit_event("after_statement", self, statement, env)
@@ -5640,7 +5640,7 @@ class Interpreter:
                 gid = eval_expr(statement.expression, env)
                 if gid.type == TYPE_INT:
                     if gid.value < 0:
-                        raise ASMRuntimeError(
+                        raise PrefixRuntimeError(
                             "GOTOPOINT id must be non-negative",
                             location=statement.location,
                             rewrite_rule="GOTOPOINT",
@@ -5649,7 +5649,7 @@ class Interpreter:
                 elif gid.type == TYPE_STR:
                     key = (TYPE_STR, gid.value)
                 else:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "GOTOPOINT expects int or string identifier",
                         location=statement.location,
                         rewrite_rule="GOTOPOINT",
@@ -5664,7 +5664,7 @@ class Interpreter:
                 target = js.target
                 key = (target.type, target.value)
                 if key not in gotopoints:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         f"GOTO to undefined gotopoint '{target.value}'", location=statement.location, rewrite_rule="GOTO"
                     )
                 i = gotopoints[key]
@@ -5687,7 +5687,7 @@ class Interpreter:
         # statement_type = type(statement)
         if isinstance(statement, Declaration):
             if "." in statement.name and not _name_exists_or_declared(statement.name):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Cannot create module-qualified name '{statement.name}'",
                     location=statement.location,
                     rewrite_rule="ASSIGN",
@@ -5697,7 +5697,7 @@ class Interpreter:
             # assigned. If a value already exists in the same environment,
             # ensure the types match.
             if statement.name in self.functions:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Identifier '{statement.name}' already bound as function",
                     location=statement.location,
                     rewrite_rule="ASSIGN",
@@ -5706,7 +5706,7 @@ class Interpreter:
             if env_found is not None:
                 existing = env_found.values.get(statement.name)
                 if existing is not None and existing.type != statement.declared_type:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         f"Type mismatch for '{statement.name}': previously declared as {existing.type}",
                         location=statement.location,
                         rewrite_rule="ASSIGN",
@@ -5719,13 +5719,13 @@ class Interpreter:
                 and "." in statement.target
                 and not _name_exists_or_declared(statement.target)
             ):
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Cannot create module-qualified name '{statement.target}'",
                     location=statement.location,
                     rewrite_rule="ASSIGN",
                 )
             if statement.target in self.functions:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Identifier '{statement.target}' already bound as function", location=statement.location, rewrite_rule="ASSIGN"
                 )
             value = self._evaluate_expression(statement.expression, env)
@@ -5752,7 +5752,7 @@ class Interpreter:
             return
         if isinstance(statement, FuncDef):
             if statement.name in self.builtins.table:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Function name '{statement.name}' conflicts with built-in", location=statement.location
                 )
             # Function table mutation invalidates call resolution caches.
@@ -5768,27 +5768,27 @@ class Interpreter:
         if isinstance(statement, PopStatement):
             frame = self.call_stack[-1]
             if frame.name == "<top-level>":
-                raise ASMRuntimeError("POP outside of function", location=statement.location, rewrite_rule="POP")
+                raise PrefixRuntimeError("POP outside of function", location=statement.location, rewrite_rule="POP")
             # Expect identifier expression to delete a symbol
             expr = statement.expression
             if not isinstance(expr, Identifier):
-                raise ASMRuntimeError("POP expects identifier", location=statement.location, rewrite_rule="POP")
+                raise PrefixRuntimeError("POP expects identifier", location=statement.location, rewrite_rule="POP")
             name = expr.name
             try:
                 value = env.get(name)
-            except ASMRuntimeError as err:
+            except PrefixRuntimeError as err:
                 err.location = statement.location
                 raise
             try:
                 env.delete(name)
-            except ASMRuntimeError as err:
+            except PrefixRuntimeError as err:
                 err.location = statement.location
                 raise
             raise ReturnSignal(value)
         if isinstance(statement, ReturnStatement):
             frame = self.call_stack[-1]
             if frame.name == "<top-level>":
-                raise ASMRuntimeError("RETURN outside of function", location=statement.location, rewrite_rule="RETURN")
+                raise PrefixRuntimeError("RETURN outside of function", location=statement.location, rewrite_rule="RETURN")
             if statement.expression:
                 value = self._evaluate_expression(statement.expression, env)
             else:
@@ -5800,13 +5800,13 @@ class Interpreter:
                 elif fn.return_type == TYPE_STR:
                     value = Value(TYPE_STR, "")
                 elif fn.return_type == TYPE_TNS:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "TNS functions must RETURN a tensor value",
                         location=statement.location,
                         rewrite_rule="RETURN",
                     )
                 elif fn.return_type == TYPE_FUNC:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "FUNC functions must RETURN a function value",
                         location=statement.location,
                         rewrite_rule="RETURN",
@@ -5817,7 +5817,7 @@ class Interpreter:
                         ctx = TypeContext(interpreter=self, location=statement.location)
                         value = spec.default_value(ctx)
                     else:
-                        raise ASMRuntimeError(
+                        raise PrefixRuntimeError(
                             f"Function {fn.name} must RETURN a {fn.return_type} value",
                             location=statement.location,
                             rewrite_rule="RETURN",
@@ -5827,7 +5827,7 @@ class Interpreter:
             count_val = self._evaluate_expression(statement.expression, env)
             count = self._expect_int(count_val, "BREAK", statement.location)
             if count <= 0:
-                raise ASMRuntimeError("BREAK count must be > 0", location=statement.location, rewrite_rule="BREAK")
+                raise PrefixRuntimeError("BREAK count must be > 0", location=statement.location, rewrite_rule="BREAK")
             raise BreakSignal(count)
         if isinstance(statement, ContinueStatement):
             # Signal to the innermost loop to skip to next iteration.
@@ -5888,11 +5888,11 @@ class Interpreter:
                     except Exception:
                         pass
 
-            t = threading.Thread(target=_thr_worker, daemon=True, name=f"asm_thr_{symbol}_{self.frame_counter}")
+            t = threading.Thread(target=_thr_worker, daemon=True, name=f"prefix_thr_{symbol}_{self.frame_counter}")
             ctrl_thr["thread"] = t
             with self._thr_lock:
                 if symbol in self._thrs:
-                    raise ASMRuntimeError(f"THR symbol '{symbol}' already exists", location=statement.location, rewrite_rule="THR")
+                    raise PrefixRuntimeError(f"THR symbol '{symbol}' already exists", location=statement.location, rewrite_rule="THR")
                 self._thrs[symbol] = ctrl_thr
             # Bind symbol to THR value in environment
             env.set(symbol, Value(TYPE_THR, ctrl_thr), declared_type="THR")
@@ -5977,11 +5977,11 @@ class Interpreter:
                     except Exception:
                         pass
 
-            t = threading.Thread(target=_async_worker_with_ctrl, daemon=True, name=f"asm_async_{self.frame_counter}")
+            t = threading.Thread(target=_async_worker_with_ctrl, daemon=True, name=f"prefix_async_{self.frame_counter}")
             ctrl_async["thread"] = t
             t.start()
             return
-        raise ASMRuntimeError("Unsupported statement", location=statement.location)
+        raise PrefixRuntimeError("Unsupported statement", location=statement.location)
 
     def _execute_if(self, statement: IfStatement, env: Environment) -> None:
         eval_expr = self._evaluate_expression
@@ -6012,7 +6012,7 @@ class Interpreter:
                 try:
                     next_cond_val = eval_expr(statement.condition, env)
                     next_cond = cond_int(next_cond_val, statement.condition.location)
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     # Propagate evaluation errors
                     raise
                 if next_cond != 0:
@@ -6063,11 +6063,11 @@ class Interpreter:
                 # nearest enclosing environment.
                 try:
                     env.delete(statement.counter)
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     # If deletion fails for any reason (e.g. frozen), leave
                     # the current binding in place; propagate nothing here.
                     pass
-        except ASMRuntimeError:
+        except PrefixRuntimeError:
             # If restoring the prior value or deleting failed, annotate
             # with loop location and re-raise.
             raise
@@ -6141,7 +6141,7 @@ class Interpreter:
             # If a BREAK has been signaled, stop starting further iterations.
             if break_event.is_set():
                 break
-            t = threading.Thread(target=lambda idx=i: _worker(idx), name=f"asm_parfor_{self.frame_counter}_{i}")
+            t = threading.Thread(target=lambda idx=i: _worker(idx), name=f"prefix_parfor_{self.frame_counter}_{i}")
             threads.append(t)
             t.start()
 
@@ -6163,7 +6163,7 @@ class Interpreter:
                         env.set(name, val)
                     else:
                         env.set(name, val, declared_type=val.type)
-                except ASMRuntimeError as err:
+                except PrefixRuntimeError as err:
                     err.location = statement.location
                     raise
 
@@ -6176,9 +6176,9 @@ class Interpreter:
             # Raise the first recorded exception as a runtime error
             exc = errors[0]
             loc = statement.location
-            if isinstance(exc, ASMRuntimeError):
+            if isinstance(exc, PrefixRuntimeError):
                 raise exc
-            raise ASMRuntimeError(f"Error in PARFOR iteration: {exc}", location=loc, rewrite_rule="PARFOR")
+            raise PrefixRuntimeError(f"Error in PARFOR iteration: {exc}", location=loc, rewrite_rule="PARFOR")
 
     def _condition_int(self, value: Value, location: Optional[SourceLocation]) -> int:
         value = self._deref_value(value, location=location, rule="COND")
@@ -6199,7 +6199,7 @@ class Interpreter:
             return 1
         spec = self.type_registry.get_optional(value.type)
         if spec is None:
-            raise ASMRuntimeError("Unsupported type in condition", location=location)
+            raise PrefixRuntimeError("Unsupported type in condition", location=location)
         ctx = TypeContext(interpreter=self, location=location)
         return int(spec.condition_int(ctx, value))
 
@@ -6253,25 +6253,25 @@ class Interpreter:
 
     def _validate_tensor_shape(self, shape: List[int], rule: str, location: SourceLocation) -> None:
         if not shape:
-            raise ASMRuntimeError("Tensor shape must have at least one dimension", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Tensor shape must have at least one dimension", location=location, rewrite_rule=rule)
         for dim in shape:
             if dim <= 0:
-                raise ASMRuntimeError("Tensor dimensions must be positive", location=location, rewrite_rule=rule)
+                raise PrefixRuntimeError("Tensor dimensions must be positive", location=location, rewrite_rule=rule)
 
     def _resolve_tensor_index(self, raw: int, dim_len: int, rule: str, location: SourceLocation) -> int:
         """Map a 1-based (or negative-from-end) index into the current dimension."""
         if raw == 0:
-            raise ASMRuntimeError("Tensor indices are 1-indexed", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Tensor indices are 1-indexed", location=location, rewrite_rule=rule)
         idx = raw
         if raw < 0:
             idx = dim_len + raw + 1
         if idx <= 0 or idx > dim_len:
-            raise ASMRuntimeError("Tensor index out of range", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Tensor index out of range", location=location, rewrite_rule=rule)
         return idx
 
     def _tensor_flat_index(self, tensor: Tensor, indices: List[int], rule: str, location: SourceLocation) -> int:
         if len(indices) != len(tensor.shape):
-            raise ASMRuntimeError("Incorrect number of tensor indices", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError("Incorrect number of tensor indices", location=location, rewrite_rule=rule)
         offset = 0
         shape = tensor.shape
         strides = tensor.strides
@@ -6298,7 +6298,7 @@ class Interpreter:
         offset = self._tensor_flat_index(tensor, indices, "ASSIGN", location)
         current = tensor.data[offset]
         if current.type != value.type:
-            raise ASMRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
         new_data = tensor.data.copy()
         new_data[offset] = value
         return Tensor(shape=list(tensor.shape), data=new_data)
@@ -6307,13 +6307,13 @@ class Interpreter:
         offset = self._tensor_flat_index(tensor, indices, "ASSIGN", location)
         current = tensor.data[offset]
         if current.type != value.type:
-            raise ASMRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Tensor element type mismatch", location=location, rewrite_rule="ASSIGN")
         tensor.data[offset] = value
 
     def _build_tensor_from_literal(self, literal: TensorLiteral, env: Environment) -> Tensor:
         items = literal.items
         if not items:
-            raise ASMRuntimeError("Tensor literal cannot be empty", location=literal.location, rewrite_rule="TNS")
+            raise PrefixRuntimeError("Tensor literal cannot be empty", location=literal.location, rewrite_rule="TNS")
         flat: List[Value] = []
         subshape: Optional[List[int]] = None
         for item in items:
@@ -6322,7 +6322,7 @@ class Interpreter:
                 if subshape is None:
                     subshape = nested.shape
                 elif subshape != nested.shape:
-                    raise ASMRuntimeError("Inconsistent tensor shape", location=item.location, rewrite_rule="TNS")
+                    raise PrefixRuntimeError("Inconsistent tensor shape", location=item.location, rewrite_rule="TNS")
                 # numpy.flat already iterates the elements; avoid constructing
                 # an intermediate list.
                 flat.extend(nested.data.flat)
@@ -6331,13 +6331,13 @@ class Interpreter:
                 if subshape is None:
                     subshape = []
                 elif subshape != []:
-                    raise ASMRuntimeError("Inconsistent tensor shape", location=item.location, rewrite_rule="TNS")
+                    raise PrefixRuntimeError("Inconsistent tensor shape", location=item.location, rewrite_rule="TNS")
                 flat.append(val)
         shape = [len(items)] + (subshape or [])
         self._validate_tensor_shape(shape, "TNS", literal.location)
         expected = self._tensor_total_size(shape)
         if len(flat) != expected:
-            raise ASMRuntimeError("Tensor literal size mismatch", location=literal.location, rewrite_rule="TNS")
+            raise PrefixRuntimeError("Tensor literal size mismatch", location=literal.location, rewrite_rule="TNS")
         return Tensor(shape=shape, data=np.array(flat, dtype=object))
 
     def _gather_index_chain(self, expr: Expression) -> Tuple[Expression, List[Expression], List[bool]]:
@@ -6425,12 +6425,12 @@ class Interpreter:
             key_val = eval_expr(node, env)
             key_val = self._deref_value(key_val, location=location, rule="INDEX")
             if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                raise ASMRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="INDEX")
+                raise PrefixRuntimeError("Map keys must be INT, FLT, or STR", location=location, rewrite_rule="INDEX")
             key = (key_val.type, key_val.value)
             if not isinstance(current.value, Map):
-                raise ASMRuntimeError("Attempted map-indexing into non-map value", location=location, rewrite_rule="INDEX")
+                raise PrefixRuntimeError("Attempted map-indexing into non-map value", location=location, rewrite_rule="INDEX")
             if key not in current.value.data:
-                raise ASMRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="INDEX")
+                raise PrefixRuntimeError(f"Key not found: {key_val.value}", location=location, rewrite_rule="INDEX")
             current = current.value.data[key]
             if idx + 1 < len(index_nodes):
                 current = self._deref_value(current, location=location, rule="INDEX")
@@ -6449,13 +6449,13 @@ class Interpreter:
                 key_val = eval_expr(key_node, env)
                 key_val = self._deref_value(key_val, location=expression.location, rule="MAP")
                 if key_val.type not in (TYPE_INT, TYPE_FLT, TYPE_STR):
-                    raise ASMRuntimeError("Map literal keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="MAP")
+                    raise PrefixRuntimeError("Map literal keys must be INT, FLT, or STR", location=expression.location, rewrite_rule="MAP")
                 key = (key_val.type, key_val.value)
                 val = eval_expr(val_node, env)
                 m.data[key] = val
             return Value(TYPE_MAP, m)
         if isinstance(expression, TypedTarget):
-            raise ASMRuntimeError("Typed target is only valid in ASSIGN", location=expression.location, rewrite_rule="ASSIGN")
+            raise PrefixRuntimeError("Typed target is only valid in ASSIGN", location=expression.location, rewrite_rule="ASSIGN")
         if isinstance(expression, PointerExpression):
             return self._make_pointer_value(expression.target, env, expression.location)
         if isinstance(expression, IndexExpression):
@@ -6481,12 +6481,12 @@ class Interpreter:
                 if not is_map:
                     # Process tensor-style indices
                     if current_val.type != TYPE_TNS:
-                        raise ASMRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=expression.location, rewrite_rule="INDEX")
+                        raise PrefixRuntimeError("Cannot use tensor-style '[...]' to index a non-tensor", location=expression.location, rewrite_rule="INDEX")
                     current_val = self._index_tensor(current_val, group_nodes, env, expression.location)
                 else:
                     # Process map-style indices
                     if current_val.type != TYPE_MAP:
-                        raise ASMRuntimeError("Cannot use map-style '<...>' to index a non-map", location=expression.location, rewrite_rule="INDEX")
+                        raise PrefixRuntimeError("Cannot use map-style '<...>' to index a non-map", location=expression.location, rewrite_rule="INDEX")
                     current_val = self._index_map(current_val, group_nodes, env, expression.location)
                 
                 i = j
@@ -6512,12 +6512,12 @@ class Interpreter:
                 self._emit_event("before_call", self, "INPUT", [], env, expression.location)
                 builtin = self.builtins.table.get("INPUT")
                 if builtin is None:
-                    raise ASMRuntimeError("Unknown function 'INPUT'", location=expression.location)
+                    raise PrefixRuntimeError("Unknown function 'INPUT'", location=expression.location)
                 supplied = 0
                 if supplied < builtin.min_args:
-                    raise ASMRuntimeError(f"INPUT expects at least {builtin.min_args} arguments", rewrite_rule="INPUT", location=expression.location)
+                    raise PrefixRuntimeError(f"INPUT expects at least {builtin.min_args} arguments", rewrite_rule="INPUT", location=expression.location)
                 if builtin.max_args is not None and supplied > builtin.max_args:
-                    raise ASMRuntimeError(f"INPUT expects at most {builtin.max_args} arguments", rewrite_rule="INPUT", location=expression.location)
+                    raise PrefixRuntimeError(f"INPUT expects at most {builtin.max_args} arguments", rewrite_rule="INPUT", location=expression.location)
                 result = builtin.impl(self, [], [], env, expression.location)
                 # Start any deferred ASYNC workers now that the builtin had
                 # an opportunity to operate on the returned THR (e.g. PAUSE).
@@ -6525,7 +6525,7 @@ class Interpreter:
                 self._emit_event("after_call", self, "INPUT", result, env, expression.location)
                 self._log_step(rule="INPUT", location=expression.location, extra={"args": [], "result": result.value})
                 return result
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Undefined identifier '{expression.name}'",
                 location=expression.location,
                 rewrite_rule="IDENT",
@@ -6600,7 +6600,7 @@ class Interpreter:
                     ctrl_expr["finished"] = True
                     ctrl_expr["state"] = "finished" if not ctrl_expr.get("stop") else "stopped"
 
-            t = threading.Thread(target=_async_worker_expr, daemon=True, name=f"asm_async_{self.frame_counter}")
+            t = threading.Thread(target=_async_worker_expr, daemon=True, name=f"prefix_async_{self.frame_counter}")
             ctrl_expr["thread"] = t
             # Defer starting the worker thread until the enclosing call
             # completes. This avoids races where a builtin (e.g. PAUSE)
@@ -6632,7 +6632,7 @@ class Interpreter:
 
             if resolved_function is None and callee_ident == "IMPORT":
                 if any(arg.name for arg in expression.args):
-                    raise ASMRuntimeError("IMPORT does not accept keyword arguments", location=expression.location, rewrite_rule="IMPORT")
+                    raise PrefixRuntimeError("IMPORT does not accept keyword arguments", location=expression.location, rewrite_rule="IMPORT")
                 first_expr = expression.args[0].expression if expression.args else None
                 module_label = first_expr.name if (first_expr is not None and type(first_expr) is Identifier) else None
                 dummy_args: List[Value] = [Value(TYPE_INT, 0)] * len(expression.args)
@@ -6641,15 +6641,15 @@ class Interpreter:
                     self._emit_event("before_call", self, "IMPORT", [], env, expression.location)
                     builtin = self.builtins.table.get("IMPORT")
                     if builtin is None:
-                        raise ASMRuntimeError("Unknown function 'IMPORT'", location=expression.location)
+                        raise PrefixRuntimeError("Unknown function 'IMPORT'", location=expression.location)
                     supplied = len(dummy_args)
                     if supplied < builtin.min_args:
-                        raise ASMRuntimeError(f"IMPORT expects at least {builtin.min_args} arguments", rewrite_rule="IMPORT", location=expression.location)
+                        raise PrefixRuntimeError(f"IMPORT expects at least {builtin.min_args} arguments", rewrite_rule="IMPORT", location=expression.location)
                     if builtin.max_args is not None and supplied > builtin.max_args:
-                        raise ASMRuntimeError(f"IMPORT expects at most {builtin.max_args} arguments", rewrite_rule="IMPORT", location=expression.location)
+                        raise PrefixRuntimeError(f"IMPORT expects at most {builtin.max_args} arguments", rewrite_rule="IMPORT", location=expression.location)
                     result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
                     self._flush_pending_async_starts()
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     self._log_step(rule="IMPORT", location=expression.location, extra={"module": module_label, "status": "error"})
                     raise
                 self._emit_event("after_call", self, "IMPORT", result, env, expression.location)
@@ -6658,7 +6658,7 @@ class Interpreter:
 
             if resolved_function is None and callee_ident == "ASSIGN":
                 if any(arg.name for arg in expression.args):
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         "ASSIGN does not accept keyword arguments",
                         location=expression.location,
                         rewrite_rule="ASSIGN",
@@ -6669,15 +6669,15 @@ class Interpreter:
                     self._emit_event("before_call", self, "ASSIGN", [], env, expression.location)
                     builtin = self.builtins.table.get("ASSIGN")
                     if builtin is None:
-                        raise ASMRuntimeError("Unknown function 'ASSIGN'", location=expression.location)
+                        raise PrefixRuntimeError("Unknown function 'ASSIGN'", location=expression.location)
                     supplied = len(dummy_args)
                     if supplied < builtin.min_args:
-                        raise ASMRuntimeError(f"ASSIGN expects at least {builtin.min_args} arguments", rewrite_rule="ASSIGN", location=expression.location)
+                        raise PrefixRuntimeError(f"ASSIGN expects at least {builtin.min_args} arguments", rewrite_rule="ASSIGN", location=expression.location)
                     if builtin.max_args is not None and supplied > builtin.max_args:
-                        raise ASMRuntimeError(f"ASSIGN expects at most {builtin.max_args} arguments", rewrite_rule="ASSIGN", location=expression.location)
+                        raise PrefixRuntimeError(f"ASSIGN expects at most {builtin.max_args} arguments", rewrite_rule="ASSIGN", location=expression.location)
                     result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
                     self._flush_pending_async_starts()
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     self._log_step(rule="ASSIGN", location=expression.location, extra={"args": None, "status": "error"})
                     raise
                 self._emit_event("after_call", self, "ASSIGN", result, env, expression.location)
@@ -6686,7 +6686,7 @@ class Interpreter:
 
             if resolved_function is None and callee_ident in ("DEL", "EXIST"):
                 if any(arg.name for arg in expression.args):
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         f"{callee_ident} does not accept keyword arguments",
                         location=expression.location,
                         rewrite_rule=callee_ident,
@@ -6697,15 +6697,15 @@ class Interpreter:
                     self._emit_event("before_call", self, callee_ident, [], env, expression.location)
                     builtin = self.builtins.table.get(callee_ident)
                     if builtin is None:
-                        raise ASMRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
+                        raise PrefixRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
                     supplied = len(dummy_args)
                     if supplied < builtin.min_args:
-                        raise ASMRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                        raise PrefixRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     if builtin.max_args is not None and supplied > builtin.max_args:
-                        raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                        raise PrefixRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     result = builtin.impl(self, dummy_args, arg_nodes, env, expression.location)
                     self._flush_pending_async_starts()
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     self._log_step(rule=callee_ident, location=expression.location, extra={"args": None, "status": "error"})
                     raise
                 self._emit_event("after_call", self, callee_ident, result, env, expression.location)
@@ -6724,7 +6724,7 @@ class Interpreter:
                     positional_args.append(value)
                 else:
                     if arg.name in keyword_args:
-                        raise ASMRuntimeError(
+                        raise PrefixRuntimeError(
                             f"Duplicate keyword argument '{arg.name}'",
                             location=expression.location,
                             rewrite_rule=callee_ident or "CALL",
@@ -6749,7 +6749,7 @@ class Interpreter:
 
                         unexpected = [k for k in keyword_args if k not in allowed]
                         if unexpected:
-                            raise ASMRuntimeError(
+                            raise PrefixRuntimeError(
                                 f"Unexpected keyword arguments: {', '.join(sorted(unexpected))}",
                                 location=expression.location,
                                 rewrite_rule=callee_ident,
@@ -6757,7 +6757,7 @@ class Interpreter:
                         if kw_key and kw_key in keyword_args:
                             positional_args.append(keyword_args.pop(kw_key))
                         if keyword_args:
-                            raise ASMRuntimeError(
+                            raise PrefixRuntimeError(
                                 f"{callee_ident} does not accept keyword arguments",
                                 location=expression.location,
                                 rewrite_rule=callee_ident,
@@ -6766,17 +6766,17 @@ class Interpreter:
                     self._emit_event("before_call", self, callee_ident, positional_args, env, expression.location)
                     builtin = self.builtins.table.get(callee_ident)
                     if builtin is None:
-                        raise ASMRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
+                        raise PrefixRuntimeError(f"Unknown function '{callee_ident}'", location=expression.location)
                     supplied = len(positional_args)
                     if supplied < builtin.min_args:
-                        raise ASMRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                        raise PrefixRuntimeError(f"{callee_ident} expects at least {builtin.min_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     if builtin.max_args is not None and supplied > builtin.max_args:
-                        raise ASMRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
+                        raise PrefixRuntimeError(f"{callee_ident} expects at most {builtin.max_args} arguments", rewrite_rule=callee_ident, location=expression.location)
                     result = builtin.impl(self, positional_args, arg_nodes, env, expression.location)
                     self._flush_pending_async_starts()
                     if pointer_args:
                         self._assign_pointer_target(pointer_args[0], result, location=expression.location, rule=callee_ident)
-                except ASMRuntimeError:
+                except PrefixRuntimeError:
                     self._log_step(
                         rule=callee_ident,
                         location=expression.location,
@@ -6802,7 +6802,7 @@ class Interpreter:
             callee_value = self._evaluate_expression(callee_expr, env)
             func_obj = self._expect_func(callee_value, "CALL", expression.location)
             return self._invoke_function_object(func_obj, positional_args, keyword_args, expression.location, env)
-        raise ASMRuntimeError("Unsupported expression", location=expression.location)
+        raise PrefixRuntimeError("Unsupported expression", location=expression.location)
 
     def _invoke_function_object(
         self,
@@ -6836,7 +6836,7 @@ class Interpreter:
         call_location: SourceLocation,
     ) -> Value:
         if len(positional_args) > len(function.params):
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Function {function.name} expects at most {len(function.params)} positional arguments but received {len(positional_args)}",
                 location=call_location,
                 rewrite_rule=function.name,
@@ -6848,7 +6848,7 @@ class Interpreter:
 
         for param, arg in zip(function.params, positional_args):
             if arg.type != param.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Argument for '{param.name}' expected {param.type} but got {arg.type}",
                     location=call_location,
                     rewrite_rule=function.name,
@@ -6859,14 +6859,14 @@ class Interpreter:
         for param in remaining_params:
             if param.name in kwds:
                 if param.default is None:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         f"Parameter '{param.name}' does not accept keyword arguments",
                         location=call_location,
                         rewrite_rule=function.name,
                     )
                 value = kwds.pop(param.name)
                 if value.type != param.type:
-                    raise ASMRuntimeError(
+                    raise PrefixRuntimeError(
                         f"Argument for '{param.name}' expected {param.type} but got {value.type}",
                         location=call_location,
                         rewrite_rule=function.name,
@@ -6874,14 +6874,14 @@ class Interpreter:
                 env.set(param.name, value, declared_type=param.type)
                 continue
             if param.default is None:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Missing required argument '{param.name}' for function {function.name}",
                     location=call_location,
                     rewrite_rule=function.name,
                 )
             default_value = self._evaluate_expression(param.default, env)
             if default_value.type != param.type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Default for '{param.name}' expected {param.type} but got {default_value.type}",
                     location=call_location,
                     rewrite_rule=function.name,
@@ -6890,7 +6890,7 @@ class Interpreter:
 
         if kwds:
             unexpected = ", ".join(sorted(kwds.keys()))
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Unexpected keyword arguments: {unexpected}",
                 location=call_location,
                 rewrite_rule=function.name,
@@ -6902,14 +6902,14 @@ class Interpreter:
         except ReturnSignal as signal:
             self.call_stack.pop()
             if signal.value.type != function.return_type:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Function {function.name} must return {function.return_type} but got {signal.value.type}",
                     location=call_location,
                     rewrite_rule=function.name,
                 )
             self._emit_event("after_call", self, function.name, signal.value, env, call_location)
             return signal.value
-        except ASMRuntimeError:
+        except PrefixRuntimeError:
             raise
         else:
             self.call_stack.pop()
@@ -6926,13 +6926,13 @@ class Interpreter:
                 self._emit_event("after_call", self, function.name, result, env, call_location)
                 return result
             if function.return_type == TYPE_TNS:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Function {function.name} must return a tensor value",
                     location=call_location,
                     rewrite_rule=function.name,
                 )
             if function.return_type == TYPE_FUNC:
-                raise ASMRuntimeError(
+                raise PrefixRuntimeError(
                     f"Function {function.name} must return a function value",
                     location=call_location,
                     rewrite_rule=function.name,
@@ -6944,7 +6944,7 @@ class Interpreter:
                 result = spec.default_value(ctx)
                 self._emit_event("after_call", self, function.name, result, env, call_location)
                 return result
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Function {function.name} must return {function.return_type}",
                 location=call_location,
                 rewrite_rule=function.name,
@@ -6963,13 +6963,13 @@ class Interpreter:
         try:
             for _priority, handler, _ext in handlers:
                 handler(*args, **kwargs)
-        except ASMRuntimeError:
+        except PrefixRuntimeError:
             raise
         except Exception as exc:
             loc = None
             if self.logger.entries:
                 loc = self.logger.entries[-1].source_location
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Extension hook '{event}' failed: {exc}",
                 location=loc,
                 rewrite_rule="EXT",
@@ -7025,10 +7025,10 @@ class Interpreter:
                 self,
                 StepContext(step_index=entry.step_index, rule=rule, location=location, extra=extra),
             )
-        except ASMRuntimeError:
+        except PrefixRuntimeError:
             raise
         except Exception as exc:
-            raise ASMRuntimeError(
+            raise PrefixRuntimeError(
                 f"Extension step rule failed: {exc}",
                 location=location,
                 rewrite_rule="EXT",
@@ -7062,7 +7062,7 @@ class TracebackFormatter:
             )
         return frames
 
-    def format_text(self, error: ASMRuntimeError, verbose: bool) -> str:
+    def format_text(self, error: PrefixRuntimeError, verbose: bool) -> str:
         lines = ["Traceback (most recent call last):"]
         for frame in self.build_frames():
             if frame.location:
@@ -7082,7 +7082,7 @@ class TracebackFormatter:
         lines.append(f"{error.__class__.__name__}: {error.message} (rewrite: {rule})")
         return "\n".join(lines)
 
-    def to_json(self, error: ASMRuntimeError) -> str:
+    def to_json(self, error: PrefixRuntimeError) -> str:
         frames_json: List[Dict[str, Any]] = []
         for index, frame in enumerate(self.build_frames()):
             entry: Dict[str, Any] = {"frame_index": index, "name": frame.name}

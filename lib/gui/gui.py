@@ -1,11 +1,11 @@
-"""ASM-Lang extension: lightweight GUI windows for image tensors.
+"""Prefix extension: lightweight GUI windows for image tensors.
 
 This module exposes three operators:
 - GUI_CREATE_WINDOW([type, width, height, title, scale_to_fit]) -> INT handle
 - GUI_SHOW_IMAGE(handle, TNS image) -> INT (1 on success)
 - GUI_CLOSE_WINDOW(handle) -> INT (1 on success)
 
-Images are expected to be ASM-Lang "image"-compatible tensors shaped
+Images are expected to be Prefix "image"-compatible tensors shaped
 [width][height][4] with INT channels (RGBA). The default window type is a
 resizable, scaled window with the standard title-bar buttons enabled.
 """
@@ -22,11 +22,11 @@ import numpy as np
 
 import tkinter as tk
 
-from extensions import ASMExtensionError, ExtensionAPI
+from extensions import PrefixExtensionError, ExtensionAPI
 
-ASM_LANG_EXTENSION_NAME = "gui"
-ASM_LANG_EXTENSION_API_VERSION = 1
-ASM_LANG_EXTENSION_ASMODULE = True
+PREFIX_EXTENSION_NAME = "gui"
+PREFIX_EXTENSION_API_VERSION = 1
+PREFIX_EXTENSION_ASMODULE = True
 
 
 @dataclass
@@ -70,11 +70,11 @@ def _expect_type_int(interpreter, arg, default: int, rule: str, location) -> int
 
 
 def _tns_to_int_image(interpreter, value, rule: str, location) -> np.ndarray:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     tns = interpreter._expect_tns(value, rule, location)
     if len(tns.shape) != 3 or tns.shape[2] not in (3, 4):
-        raise ASMRuntimeError(
+        raise PrefixRuntimeError(
             f"{rule} expects an image tensor shaped [w][h][3|4]",
             location=location,
             rewrite_rule=rule,
@@ -199,7 +199,7 @@ def _on_resize(state: _GuiState, wid: int, _event=None) -> None:
 
 
 def _apply_window_kind(top: "tk.Toplevel", kind: str, location) -> Tuple[bool, str]:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     normalized = kind.strip().lower() or "scaled"
     scale_to_fit = True
@@ -213,7 +213,7 @@ def _apply_window_kind(top: "tk.Toplevel", kind: str, location) -> Tuple[bool, s
     elif normalized == "borderless":
         top.overrideredirect(True)
     else:
-        raise ASMRuntimeError(
+        raise PrefixRuntimeError(
             f"GUI_CREATE_WINDOW: unknown window type '{kind}'",
             location=location,
             rewrite_rule="GUI_CREATE_WINDOW",
@@ -228,7 +228,7 @@ def _op_create_window(interpreter, args, _arg_nodes, _env, location):
     kind = _expect_type_str(interpreter, args[0] if len(args) >= 1 else None, "scaled", "GUI_CREATE_WINDOW", location)
     width = _expect_type_int(interpreter, args[1] if len(args) >= 2 else None, 640, "GUI_CREATE_WINDOW", location)
     height = _expect_type_int(interpreter, args[2] if len(args) >= 3 else None, 480, "GUI_CREATE_WINDOW", location)
-    title = _expect_type_str(interpreter, args[3] if len(args) >= 4 else None, "ASM-Lang GUI", "GUI_CREATE_WINDOW", location)
+    title = _expect_type_str(interpreter, args[3] if len(args) >= 4 else None, "Prefix GUI", "GUI_CREATE_WINDOW", location)
     scale_provided = len(args) >= 5
     scale_flag = _expect_type_int(interpreter, args[4] if scale_provided else None, 1, "GUI_CREATE_WINDOW", location)
 
@@ -257,15 +257,15 @@ def _op_create_window(interpreter, args, _arg_nodes, _env, location):
 
 
 def _op_show_image(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 2:
-        raise ASMRuntimeError("GUI_SHOW_IMAGE expects 2 arguments", location=location, rewrite_rule="GUI_SHOW_IMAGE")
+        raise PrefixRuntimeError("GUI_SHOW_IMAGE expects 2 arguments", location=location, rewrite_rule="GUI_SHOW_IMAGE")
     wid = interpreter._expect_int(args[0], "GUI_SHOW_IMAGE", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("GUI_SHOW_IMAGE: invalid window handle", location=location, rewrite_rule="GUI_SHOW_IMAGE")
+        raise PrefixRuntimeError("GUI_SHOW_IMAGE: invalid window handle", location=location, rewrite_rule="GUI_SHOW_IMAGE")
 
     try:
         img = _tns_to_int_image(interpreter, args[1], "GUI_SHOW_IMAGE", location)
@@ -277,55 +277,55 @@ def _op_show_image(interpreter, args, _arg_nodes, _env, location):
             st.root.update()
         except Exception:
             pass
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"GUI_SHOW_IMAGE failed: {exc}", location=location, rewrite_rule="GUI_SHOW_IMAGE")
+        raise PrefixRuntimeError(f"GUI_SHOW_IMAGE failed: {exc}", location=location, rewrite_rule="GUI_SHOW_IMAGE")
     return Value(TYPE_INT, 1)
 
 
 def _op_close_window(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 1:
-        raise ASMRuntimeError("GUI_CLOSE_WINDOW expects 1 argument", location=location, rewrite_rule="GUI_CLOSE_WINDOW")
+        raise PrefixRuntimeError("GUI_CLOSE_WINDOW expects 1 argument", location=location, rewrite_rule="GUI_CLOSE_WINDOW")
     wid = interpreter._expect_int(args[0], "GUI_CLOSE_WINDOW", location)
     st = _state(interpreter)
     if wid not in st.windows:
-        raise ASMRuntimeError("GUI_CLOSE_WINDOW: invalid window handle", location=location, rewrite_rule="GUI_CLOSE_WINDOW")
+        raise PrefixRuntimeError("GUI_CLOSE_WINDOW: invalid window handle", location=location, rewrite_rule="GUI_CLOSE_WINDOW")
     _close_window(st, wid)
     st.root.update_idletasks()
     return Value(TYPE_INT, 1)
 
 
 def _op_minimize(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 1:
-        raise ASMRuntimeError("GUI_MINIMIZE expects 1 argument", location=location, rewrite_rule="GUI_MINIMIZE")
+        raise PrefixRuntimeError("GUI_MINIMIZE expects 1 argument", location=location, rewrite_rule="GUI_MINIMIZE")
     wid = interpreter._expect_int(args[0], "GUI_MINIMIZE", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("GUI_MINIMIZE: invalid window handle", location=location, rewrite_rule="GUI_MINIMIZE")
+        raise PrefixRuntimeError("GUI_MINIMIZE: invalid window handle", location=location, rewrite_rule="GUI_MINIMIZE")
     try:
         win.top.iconify()
         st.root.update_idletasks()
     except Exception:
-        raise ASMRuntimeError("GUI_MINIMIZE failed", location=location, rewrite_rule="GUI_MINIMIZE")
+        raise PrefixRuntimeError("GUI_MINIMIZE failed", location=location, rewrite_rule="GUI_MINIMIZE")
     return Value(TYPE_INT, 1)
 
 
 def _op_maximize(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 1:
-        raise ASMRuntimeError("GUI_MAXIMIZE expects 1 argument", location=location, rewrite_rule="GUI_MAXIMIZE")
+        raise PrefixRuntimeError("GUI_MAXIMIZE expects 1 argument", location=location, rewrite_rule="GUI_MAXIMIZE")
     wid = interpreter._expect_int(args[0], "GUI_MAXIMIZE", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("GUI_MAXIMIZE: invalid window handle", location=location, rewrite_rule="GUI_MAXIMIZE")
+        raise PrefixRuntimeError("GUI_MAXIMIZE: invalid window handle", location=location, rewrite_rule="GUI_MAXIMIZE")
     try:
         # Prefer platform-friendly state call; fall back silently if unsupported
         try:
@@ -340,20 +340,20 @@ def _op_maximize(interpreter, args, _arg_nodes, _env, location):
                 win.top.geometry(f"{w}x{h}")
         st.root.update_idletasks()
     except Exception:
-        raise ASMRuntimeError("GUI_MAXIMIZE failed", location=location, rewrite_rule="GUI_MAXIMIZE")
+        raise PrefixRuntimeError("GUI_MAXIMIZE failed", location=location, rewrite_rule="GUI_MAXIMIZE")
     return Value(TYPE_INT, 1)
 
 
 def _op_to_front(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 1:
-        raise ASMRuntimeError("GUI_TO_FRONT expects 1 argument", location=location, rewrite_rule="GUI_TO_FRONT")
+        raise PrefixRuntimeError("GUI_TO_FRONT expects 1 argument", location=location, rewrite_rule="GUI_TO_FRONT")
     wid = interpreter._expect_int(args[0], "GUI_TO_FRONT", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("GUI_TO_FRONT: invalid window handle", location=location, rewrite_rule="GUI_TO_FRONT")
+        raise PrefixRuntimeError("GUI_TO_FRONT: invalid window handle", location=location, rewrite_rule="GUI_TO_FRONT")
     try:
         win.top.lift()
         # Some platforms may require also setting attributes
@@ -364,30 +364,30 @@ def _op_to_front(interpreter, args, _arg_nodes, _env, location):
             pass
         st.root.update_idletasks()
     except Exception:
-        raise ASMRuntimeError("GUI_TO_FRONT failed", location=location, rewrite_rule="GUI_TO_FRONT")
+        raise PrefixRuntimeError("GUI_TO_FRONT failed", location=location, rewrite_rule="GUI_TO_FRONT")
     return Value(TYPE_INT, 1)
 
 
 def _op_to_back(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import ASMRuntimeError, TYPE_INT, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, Value
 
     if len(args) < 1:
-        raise ASMRuntimeError("GUI_TO_BACK expects 1 argument", location=location, rewrite_rule="GUI_TO_BACK")
+        raise PrefixRuntimeError("GUI_TO_BACK expects 1 argument", location=location, rewrite_rule="GUI_TO_BACK")
     wid = interpreter._expect_int(args[0], "GUI_TO_BACK", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("GUI_TO_BACK: invalid window handle", location=location, rewrite_rule="GUI_TO_BACK")
+        raise PrefixRuntimeError("GUI_TO_BACK: invalid window handle", location=location, rewrite_rule="GUI_TO_BACK")
     try:
         win.top.lower()
         st.root.update_idletasks()
     except Exception:
-        raise ASMRuntimeError("GUI_TO_BACK failed", location=location, rewrite_rule="GUI_TO_BACK")
+        raise PrefixRuntimeError("GUI_TO_BACK failed", location=location, rewrite_rule="GUI_TO_BACK")
     return Value(TYPE_INT, 1)
 
 
 def _op_screen(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, ASMRuntimeError
+    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, PrefixRuntimeError
 
     st = _state(interpreter)
     try:
@@ -395,7 +395,7 @@ def _op_screen(interpreter, args, _arg_nodes, _env, location):
         width = int(st.root.winfo_screenwidth())
         height = int(st.root.winfo_screenheight())
     except Exception:
-        raise ASMRuntimeError("SCREEN: failed to query screen size", location=location, rewrite_rule="SCREEN")
+        raise PrefixRuntimeError("SCREEN: failed to query screen size", location=location, rewrite_rule="SCREEN")
 
     # Build a 1-D tensor [width, height] with INT channel values
     data = np.array([Value(TYPE_INT, int(width)), Value(TYPE_INT, int(height))], dtype=object)
@@ -403,34 +403,34 @@ def _op_screen(interpreter, args, _arg_nodes, _env, location):
 
 
 def _op_window(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, ASMRuntimeError
+    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, PrefixRuntimeError
 
     if len(args) < 1:
-        raise ASMRuntimeError("WINDOW expects 1 argument", location=location, rewrite_rule="WINDOW")
+        raise PrefixRuntimeError("WINDOW expects 1 argument", location=location, rewrite_rule="WINDOW")
     wid = interpreter._expect_int(args[0], "WINDOW", location)
     st = _state(interpreter)
     win = st.windows.get(wid)
     if win is None:
-        raise ASMRuntimeError("WINDOW: invalid window handle", location=location, rewrite_rule="WINDOW")
+        raise PrefixRuntimeError("WINDOW: invalid window handle", location=location, rewrite_rule="WINDOW")
     try:
         # Ensure geometry is up-to-date
         win.top.update_idletasks()
         width = int(win.top.winfo_width())
         height = int(win.top.winfo_height())
     except Exception:
-        raise ASMRuntimeError("WINDOW: failed to query window size", location=location, rewrite_rule="WINDOW")
+        raise PrefixRuntimeError("WINDOW: failed to query window size", location=location, rewrite_rule="WINDOW")
 
     data = np.array([Value(TYPE_INT, int(width)), Value(TYPE_INT, int(height))], dtype=object)
     return Value(TYPE_TNS, Tensor(shape=[2], data=data))
 
 
 def _op_screenshot(interpreter, args, _arg_nodes, _env, location):
-    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, ASMRuntimeError
+    from interpreter import TYPE_TNS, TYPE_INT, Value, Tensor, PrefixRuntimeError
     import sys
 
     # Only implement a reliable screenshot on Windows using GDI.
     if sys.platform != "win32":
-        raise ASMRuntimeError("SCREENSHOT is only supported on Windows", location=location, rewrite_rule="SCREENSHOT")
+        raise PrefixRuntimeError("SCREENSHOT is only supported on Windows", location=location, rewrite_rule="SCREENSHOT")
 
     try:
         import ctypes
@@ -503,13 +503,13 @@ def _op_screenshot(interpreter, args, _arg_nodes, _env, location):
         flat = np.array([_Val(_TINT, int(v)) for v in transposed.flatten()], dtype=object)
         return Value(TYPE_TNS, Tensor(shape=[int(width), int(height), 4], data=flat))
 
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"SCREENSHOT failed: {exc}", location=location, rewrite_rule="SCREENSHOT")
+        raise PrefixRuntimeError(f"SCREENSHOT failed: {exc}", location=location, rewrite_rule="SCREENSHOT")
 
 
-def asm_lang_register(ext: ExtensionAPI) -> None:
+def prefix_register(ext: ExtensionAPI) -> None:
     ext.metadata(name="gui", version="0.1.0")
     ext.register_operator(
         "CREATE_WINDOW",

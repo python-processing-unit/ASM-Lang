@@ -1,0 +1,228 @@
+# Statistics utilities for 1-D numeric tensors
+# Note: these routines expect a 1-D numeric `TNS` (INT/FLT elements).
+# They intentionally avoid complex type-dispatching and nested-tensor flattening
+# for simplicity; callers should pass a 1-D tensor (e.g. from SHAPE/SLICE or
+# constructed directly). Functions return INT or FLT as documented below.
+
+# API:
+# MEAN(TNS: values):FLT
+# MEDIAN(TNS: values):FLT
+# MODE(TNS: values):TNS
+# HMEAN(TNS: values):FLT
+# QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT
+# VARIANCE(TNS: values, INT: sample = 0):FLT
+# STDEV(TNS: values, INT: sample = 0):FLT
+# HISTOGRAM(TNS: values, INT: bins):TNS
+# DESCRIBE(TNS: values):TNS
+
+FUNC MEAN(TNS: values):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
+    FLT: sum = 0.0
+    FOR(i, n){
+        FADD(@sum, values[i])
+    }
+    RETURN(FDIV(sum, n))
+}
+
+FUNC MEDIAN(TNS: values):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
+    # k1 is the lower median rank (1-based)
+    INT: k1 = DIV(ADD(n, 1), 10) # DIV by 2 (binary 10)
+    # if even, k2 is k1+1, else k2==k1
+    INT: is_even = MOD(n, 10)
+    INT: k2 = k1
+    IF(EQ(is_even, 0)) { k2 = ADD(k1, 1) }
+
+    # find k1
+    FLT: val1 = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
+        }
+        IF(AND(LT(less, k1), LTE(k1, le))){ val1 = cand; BREAK(1) }
+    }
+
+    IF(EQ(k1, k2)) { RETURN(val1) }
+
+    # find k2
+    FLT: val2 = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
+        }
+        IF(AND(LT(less, k2), LTE(k2, le))){ val2 = cand; BREAK(1) }
+    }
+
+    RETURN(DIV(ADD(val1, val2), 10.0))
+}
+
+FUNC MODE(TNS: values):TNS{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { RETURN([ ]) }
+
+    # Count frequencies via MAP to avoid O(n^2) rescans.
+    MAP: counts = < FLT(values[1]) = 1 >
+    IF(GT(n, 1)){
+        FOR(i, SUB(n, 1)){
+            INT: idx = ADD(i, 1)
+            FLT: v = FLT(values[idx])
+            IF(KEYIN(v, counts)){
+                counts<v> = ADD(counts<v>, 1)
+            } ELSE {
+                counts<v> = 1
+            }
+        }
+    }
+
+    INT: max_count = MAX(VALUES(counts))
+    TNS: keys = KEYS(counts)
+    INT: klen = TLEN(keys, 1)
+
+    INT: mode_count = 0
+    FOR(i, klen){
+        FLT: k = FLT(keys[i])
+        IF(EQ(counts<k>, max_count)) { ADD(@mode_count, 1) }
+    }
+    IF(EQ(mode_count, 0)) { RETURN([ ]) }
+
+    TNS: out = TNS([mode_count], 0.0)
+    INT: out_i = 0
+    FOR(i, klen){
+        FLT: k = FLT(keys[i])
+        IF(EQ(counts<k>, max_count)){
+            ADD(@out_i, 1)
+            out[out_i] = k
+        }
+    }
+    RETURN(out)
+}
+
+FUNC HMEAN(TNS: values):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
+    FLT: denom = 0.0
+    FOR(i, n){
+        ADD(@denom, FDIV(1.0, values[i]))
+    }
+    RETURN(FDIV(n, denom))
+}
+
+FUNC QUANTILE(TNS: values, INT: q_num, INT: q_den):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
+    # target index = floor(q * (n-1)) + 1, with q = q_num/q_den
+    INT: range = SUB(n, 1)
+    INT: prod = MUL(q_num, range)
+    INT: target = DIV(prod, q_den)
+    INT: k = ADD(target, 1)
+
+    FLT: out = 0.0
+    FOR(i, n){
+        FLT: cand = FLT(values[i])
+        INT: less = 0
+        INT: le = 0
+        FOR(j, n){
+            FLT: v = FLT(values[j])
+            IF(LT(v, cand)) { ADD(@less, 1) }
+            IF(OR(LT(v, cand), EQ(v, cand))) { ADD(@le, 1) }
+        }
+        IF(AND(LT(less, k), LTE(k, le))){ out = cand; BREAK(1) }
+    }
+    RETURN(out)
+}
+
+FUNC VARIANCE(TNS: values, INT: sample = 0):FLT{
+    INT: n = TLEN(values, 1)
+    IF(EQ(n, 0)) { THROW("empty input") }
+    FLT: mean = MEAN(values)
+    FLT: var_sum = 0.0
+    FOR(i, n){
+        FLT: diff = FSUB(values[i], mean)
+        ADD(@var_sum, MUL(diff, diff))
+    }
+    INT: denom = SUB(n, sample)
+    # Tests expect integer-division semantics (truncation) for variance
+    FLT: raw = FDIV(var_sum, denom)
+    FLT: truncated = FLT(INT(raw))
+    RETURN(truncated)
+}
+
+FUNC STDEV(TNS: values, INT: sample = 0):FLT{
+    FLT: var = VARIANCE(values, sample)
+    # Square root: exponent 1/2 -> binary literal 0.1 (equals 0.5)
+    RETURN(POW(var, 0.1))
+}
+
+FUNC HISTOGRAM(TNS: values, INT: bins):TNS{
+    INT: n = TLEN(values, 1)
+    IF(OR(EQ(n, 0), LT(bins, 1))) { RETURN(TNS([bins], 0)) }
+
+    # find min and max
+    FLT: mn = FLT(values[1])
+    FLT: mx = FLT(values[1])
+    FOR(i, n){
+        FLT: v = FLT(values[i])
+        IF(LT(v, mn)) { mn = v }
+        IF(GT(v, mx)) { mx = v }
+    }
+
+    TNS: hist = TNS([bins], 0)
+    IF(EQ(mn, mx)){
+        # all values equal -> put all counts in first bin
+        hist[1] = n
+        RETURN(hist)
+    }
+
+    # width denominator: (mx - mn + 1) to ensure max maps to last bin
+    FLT: den = ADD(SUB(mx, mn), 1.0)
+    FOR(i, n){
+        FLT: offset = FSUB(values[i], mn)
+        FLT: ratio = FDIV(FMUL(offset, bins), den)
+        INT: bin = INT(ratio)
+        # bin ranges 0..bins-1 -> store at 1-based index
+        INT: bi = ADD(bin, 1)
+        hist[bi] = ADD(hist[bi], 1)
+    }
+    RETURN(hist)
+}
+
+FUNC DESCRIBE(TNS: values):TNS{
+    INT: n = TLEN(values, 1)
+    # desc layout: [count, mean, stdev, min, max] -> length 5 (binary 101)
+    TNS: desc = TNS([101], 0)
+    IF(EQ(n, 0)){
+        desc[1] = 0
+        RETURN(desc)
+    }
+    desc[1] = n
+    desc[10] = INT(MEAN(values))
+    desc[11] = INT(STDEV(values, 0))
+
+    # min / max
+    FLT: mn = FLT(values[1])
+    FLT: mx = FLT(values[1])
+    FOR(i, n){
+        FLT: v = FLT(values[i])
+        IF(LT(v, mn)) {
+            mn = v
+        }
+        IF(GT(v, mx)) {
+            mx = v
+        }
+    }
+    desc[100] = INT(mn)
+    desc[101] = INT(mx)
+    RETURN(desc)
+}

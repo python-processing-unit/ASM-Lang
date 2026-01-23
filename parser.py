@@ -4,7 +4,7 @@ from typing import Iterable, List, Optional, Tuple, Union
 
 from fractions import Fraction
 
-from lexer import ASMParseError, Token
+from lexer import PrefixParseError, Token
 
 
 @dataclass(slots=True)
@@ -259,12 +259,12 @@ class Parser:
         if neg:
             text = text[1:]
         if "." not in text:
-            raise ASMParseError(f"Invalid FLT literal at line {token.line}")
+            raise PrefixParseError(f"Invalid FLT literal at line {token.line}")
         left, right = text.split(".", 1)
         if left == "" or right == "":
-            raise ASMParseError(f"Invalid FLT literal at line {token.line}")
+            raise PrefixParseError(f"Invalid FLT literal at line {token.line}")
         if not set(left).issubset({"0", "1"}) or not set(right).issubset({"0", "1"}):
-            raise ASMParseError(f"Invalid FLT literal at line {token.line}")
+            raise PrefixParseError(f"Invalid FLT literal at line {token.line}")
         numerator = (int(left, 2) << len(right)) + int(right, 2)
         denom = 1 << len(right)
         value = float(Fraction(numerator, denom))
@@ -293,7 +293,7 @@ class Parser:
         if token.type == "TRY":
             return self._parse_try()
         if token.type == "CATCH":
-            raise ASMParseError(f"CATCH must immediately follow a TRY block at line {token.line}")
+            raise PrefixParseError(f"CATCH must immediately follow a TRY block at line {token.line}")
         if token.type == "FUNC":
             return self._parse_func()
         if token.type == "IF":
@@ -366,7 +366,7 @@ class Parser:
                     seen_default = True
                     default_expr = self._parse_expression()
                 elif seen_default:
-                    raise ASMParseError(
+                    raise PrefixParseError(
                         f"Positional parameter cannot follow parameter with default at line {name_tok.line}")
                 params.append(Param(type=type_token.value, name=name_tok.value, default=default_expr))
                 if not self._match("COMMA"):
@@ -393,7 +393,7 @@ class Parser:
                     seen_default = True
                     default_expr = self._parse_expression()
                 elif seen_default:
-                    raise ASMParseError(
+                    raise PrefixParseError(
                         f"Positional parameter cannot follow parameter with default at line {name_tok.line}")
                 params.append(Param(type=type_token.value, name=name_tok.value, default=default_expr))
                 if not self._match("COMMA"):
@@ -501,7 +501,7 @@ class Parser:
         self._consume_newlines()
         if self._peek().type != "CATCH":
             tok = self._peek()
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"TRY must be followed by a CATCH block (found {tok.type}) at line {tok.line}"
             )
         self._consume("CATCH")
@@ -518,7 +518,7 @@ class Parser:
                 catch_symbol = sym.value
             else:
                 tok = self._peek()
-                raise ASMParseError(
+                raise PrefixParseError(
                     f"Invalid CATCH syntax (found {tok.type}) at line {tok.line}"
                 )
         catch_block: Block = self._parse_block()
@@ -535,7 +535,7 @@ class Parser:
             start = self._consume("LBRACE")
             closing = "RBRACE"
         else:
-            raise ASMParseError(f"Expected '{{' to start block but found {opening}")
+            raise PrefixParseError(f"Expected '{{' to start block but found {opening}")
         statements: List[Statement] = self._parse_statements(stop_tokens={closing})
         self._consume(closing)
         return Block(location=self._location_from_token(start), statements=statements)
@@ -560,7 +560,7 @@ class Parser:
             sval = number.value
             if sval.startswith("-"):
                 if len(sval) == 1:
-                    raise ASMParseError(f"Invalid numeric literal at line {number.line}")
+                    raise PrefixParseError(f"Invalid numeric literal at line {number.line}")
                 value = -int(sval[1:], 2)
             else:
                 value = int(sval, 2)
@@ -594,7 +594,7 @@ class Parser:
             expr: Expression = self._parse_expression()
             self._consume("RPAREN")
             return expr
-        raise ASMParseError(f"Unexpected token {token.type} in expression at line {token.line}")
+        raise PrefixParseError(f"Unexpected token {token.type} in expression at line {token.line}")
 
     def _parse_index_suffix(self, base: Expression) -> IndexExpression:
         start_tok = self._peek()
@@ -630,12 +630,12 @@ class Parser:
     def _parse_index_expression(self) -> IndexExpression:
         expr = self._parse_primary()
         if self._peek().type not in ("LBRACKET", "LANGLE"):
-            raise ASMParseError(f"Expected '[' or '<' in indexed assignment at line {self._peek().line}")
+            raise PrefixParseError(f"Expected '[' or '<' in indexed assignment at line {self._peek().line}")
         expr = self._parse_index_suffix(expr)
         while self._peek().type in ("LBRACKET", "LANGLE"):
             expr = self._parse_index_suffix(expr)
         if not isinstance(expr, IndexExpression):
-            raise ASMParseError(f"Invalid indexed assignment at line {self._peek().line}")
+            raise PrefixParseError(f"Invalid indexed assignment at line {self._peek().line}")
         return expr
 
     def _parse_call_suffix(self, callee: Expression) -> CallExpression:
@@ -651,7 +651,7 @@ class Parser:
                         type_tok = self._consume_type_token()
                         self._consume("COLON")
                         if self._peek().type != "IDENT":
-                            raise ASMParseError(f"ASSIGN typed target must be an identifier at line {self._peek().line}")
+                            raise PrefixParseError(f"ASSIGN typed target must be an identifier at line {self._peek().line}")
                         ident_tok = self._consume("IDENT")
                         ident_expr = Identifier(location=self._location_from_token(ident_tok), name=ident_tok.value)
                         typed_expr = TypedTarget(
@@ -663,7 +663,7 @@ class Parser:
                     else:
                         arg_expr = self._parse_expression()
                         if not isinstance(arg_expr, (Identifier, IndexExpression)):
-                            raise ASMParseError(f"ASSIGN target must be identifier or indexed target at line {self._peek().line}")
+                            raise PrefixParseError(f"ASSIGN target must be identifier or indexed target at line {self._peek().line}")
                         args.append(CallArgument(name=None, expression=arg_expr))
                 else:
                     if self._peek().type == "IDENT" and self._peek_next().type == "EQUALS":
@@ -674,7 +674,7 @@ class Parser:
                         args.append(CallArgument(name=name_tok.value, expression=arg_expr))
                     else:
                         if seen_kw:
-                            raise ASMParseError(
+                            raise PrefixParseError(
                                 f"Positional argument cannot follow keyword argument at line {self._peek().line}")
                         args.append(CallArgument(name=None, expression=self._parse_expression()))
                 if not self._match("COMMA"):
@@ -769,7 +769,7 @@ class Parser:
     def _consume(self, token_type: str) -> Token:
         token = self._peek()
         if token.type != token_type:
-            raise ASMParseError(f"Expected token {token_type} but found {token.type} at line {token.line}")
+            raise PrefixParseError(f"Expected token {token_type} but found {token.type} at line {token.line}")
         self.index += 1
         return token
 
@@ -799,7 +799,7 @@ class Parser:
     def _consume_type_token(self) -> Token:
         token = self._peek()
         if token.value not in self.type_names:
-            raise ASMParseError(f"Unknown type '{token.value}' at line {token.line}")
+            raise PrefixParseError(f"Unknown type '{token.value}' at line {token.line}")
         self.index += 1
         return token
 

@@ -3,11 +3,11 @@ from dataclasses import dataclass
 from typing import List
 
 
-class ASMError(Exception):
+class PrefixError(Exception):
     """Base class for interpreter errors."""
 
 
-class ASMParseError(ASMError):
+class PrefixParseError(PrefixError):
     """Raised when parsing fails."""
 
 
@@ -143,7 +143,7 @@ class Lexer:
             if _is_identifier_start(ch):
                 tokens_append(self._consume_identifier())
                 continue
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"Unexpected character '{ch}' at {self.filename}:{self.line}:{self.column}"
             )
         tokens_append(Token("EOF", "", self.line, self.column))
@@ -178,7 +178,7 @@ class Lexer:
         line, col = self.line, self.column
         opening = self._peek()
         if opening not in ('"', "'"):
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"Expected string opening quote at {self.filename}:{line}:{col}"
             )
         self._advance()  # consume opening quote
@@ -191,8 +191,8 @@ class Lexer:
         def _is_hex_digit(ch: str) -> bool:
             return ("0" <= ch <= "9") or ("a" <= ch <= "f") or ("A" <= ch <= "F")
 
-        def _escape_error(msg: str, esc_line: int, esc_col: int) -> ASMParseError:
-            return ASMParseError(f"{msg} at {self.filename}:{esc_line}:{esc_col}")
+        def _escape_error(msg: str, esc_line: int, esc_col: int) -> PrefixParseError:
+            return PrefixParseError(f"{msg} at {self.filename}:{esc_line}:{esc_col}")
 
         def _consume_exact_hex(count: int, *, esc_line: int, esc_col: int, kind: str) -> str:
             digits: List[str] = []
@@ -214,14 +214,14 @@ class Lexer:
                 return Token("STRING", "".join(chars), line, col)
             # Newlines are not permitted in string literals.
             if ch == "\n" or ch == "\r":
-                raise ASMParseError(
+                raise PrefixParseError(
                     f"Unterminated string literal at {self.filename}:{line}:{col}"
                 )
 
             if ch == "\\":
                 esc_line, esc_col = self.line, self.column
                 if self.index + 1 >= n:
-                    raise ASMParseError(
+                    raise PrefixParseError(
                         f"Unterminated string literal at {self.filename}:{line}:{col}"
                     )
                 nxt = text[self.index + 1]
@@ -237,11 +237,11 @@ class Lexer:
                     _advance()  # consume '\\'
                     chars.append("\\")
                     if self._eof:
-                        raise ASMParseError(
+                        raise PrefixParseError(
                             f"Unterminated string literal at {self.filename}:{line}:{col}"
                         )
                     if _peek() == "\n" or _peek() == "\r":
-                        raise ASMParseError(
+                        raise PrefixParseError(
                             f"Unterminated string literal at {self.filename}:{line}:{col}"
                         )
                     chars.append(_peek())
@@ -251,7 +251,7 @@ class Lexer:
                 # Non-raw mode: interpret escape sequences.
                 _advance()  # consume '\\'
                 if self._eof:
-                    raise ASMParseError(
+                    raise PrefixParseError(
                         f"Unterminated string literal at {self.filename}:{line}:{col}"
                     )
                 code = _peek()
@@ -306,7 +306,7 @@ class Lexer:
             chars.append(ch)
             _advance()
 
-        raise ASMParseError(
+        raise PrefixParseError(
             f"Unterminated string literal at {self.filename}:{line}:{col}"
         )
 
@@ -318,7 +318,7 @@ class Lexer:
         while not self._eof and _peek() in " \t\r":
             _advance()
         if self._eof or self._peek() not in "01":
-            raise ASMParseError(f"Expected binary digits after '-' at {self.filename}:{line}:{col}")
+            raise PrefixParseError(f"Expected binary digits after '-' at {self.filename}:{line}:{col}")
         whole = self._consume_binary_digits()
         if not self._eof and self._peek() == ".":
             saved_index, saved_line, saved_col = self.index, self.line, self.column
@@ -350,7 +350,7 @@ class Lexer:
     def _consume_identifier(self) -> Token:
         line, col = self.line, self.column
         if not self._eof and self._peek() in "01":
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"Identifiers must not start with '0' or '1' at {self.filename}:{line}:{col}"
             )
         chars: List[str] = []
@@ -380,7 +380,7 @@ class Lexer:
 
     def _consume_line_continuation(self) -> None:
         if self.index + 1 >= self._n:
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"Invalid line continuation '^' at {self.filename}:{self.line}:{self.column}"
             )
         ch1 = self.text[self.index + 1]
@@ -411,11 +411,11 @@ class Lexer:
                 if self.index < self._n and self.text[self.index] == "\n":
                     self._advance()
                 return
-            raise ASMParseError(
+            raise PrefixParseError(
                 f"Invalid line continuation '^' before comment not terminated by newline at {self.filename}:{self.line}:{self.column}"
             )
 
-        raise ASMParseError(
+        raise PrefixParseError(
             f"Invalid line continuation '^' not followed by newline or code note at {self.filename}:{self.line}:{self.column}"
         )
 

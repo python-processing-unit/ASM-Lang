@@ -1,4 +1,4 @@
-"""ASM-Lang extension: image loading (PNG, JPEG, BMP) using stdlib only.
+"""Prefix extension: image loading (PNG, JPEG, BMP) using stdlib only.
 
 The implementation prefers Windows GDI+ via ``ctypes`` when available, which
 gives broad codec coverage without third-party modules. On non-Windows
@@ -30,47 +30,47 @@ Image = Any
 import numpy as np
 
 from interpreter import Value, Tensor
-from extensions import ASMExtensionError, ExtensionAPI
+from extensions import PrefixExtensionError, ExtensionAPI
 
 
-ASM_LANG_EXTENSION_NAME = "image"
-ASM_LANG_EXTENSION_API_VERSION = 1
-ASM_LANG_EXTENSION_ASMODULE = True
+PREFIX_EXTENSION_NAME = "image"
+PREFIX_EXTENSION_API_VERSION = 1
+PREFIX_EXTENSION_ASMODULE = True
 
 
 def _expect_str(v: Any, rule: str, location: Any) -> str:
-    from interpreter import ASMRuntimeError, TYPE_STR
+    from interpreter import PrefixRuntimeError, TYPE_STR
 
     if getattr(v, "type", None) != TYPE_STR:
-        raise ASMRuntimeError(f"{rule} expects STR", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects STR", location=location, rewrite_rule=rule)
     return str(v.value)
 
 
 def _check_path(path: str, rule: str, location: Any) -> None:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     if not path:
-        raise ASMRuntimeError(f"{rule}: path must be non-empty", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: path must be non-empty", location=location, rewrite_rule=rule)
     if not os.path.exists(path):
-        raise ASMRuntimeError(f"{rule}: file not found", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: file not found", location=location, rewrite_rule=rule)
 
 
 def _guard_image_size(width: int, height: int, rule: str, location: Any) -> None:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     if width <= 0 or height <= 0:
-        raise ASMRuntimeError(f"{rule}: invalid image dimensions", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: invalid image dimensions", location=location, rewrite_rule=rule)
     # Simple safety limit to avoid exhausting memory on crafted inputs.
     if width * height > 100_000_000:
-        raise ASMRuntimeError(f"{rule}: image too large", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: image too large", location=location, rewrite_rule=rule)
 
 
 def _make_tensor_from_pixels(width: int, height: int, pixels: List[int], rule: str, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     expected: int = width * height * 4
     if len(pixels) != expected:
-        raise ASMRuntimeError(f"{rule}: pixel buffer has unexpected length", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: pixel buffer has unexpected length", location=location, rewrite_rule=rule)
     # micro-optim: cache local refs for faster construction
     _Val = Value
     _TINT: str = TYPE_INT
@@ -486,7 +486,7 @@ def _load_bmp_file(path: str) -> Tuple[int, int, List[int]]:
 # ---- Operators ----
 
 def _op_load_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     path: str = _expect_str(args[0], "LOAD_PNG", location)
     _check_path(path, "LOAD_PNG", location)
@@ -494,14 +494,14 @@ def _op_load_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _en
         w, h, pixels = _load_png_file(path)
         _guard_image_size(w, h, "LOAD_PNG", location)
         return _make_tensor_from_pixels(w, h, pixels, "LOAD_PNG", location)
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"LOAD_PNG failed: {exc}", location=location, rewrite_rule="LOAD_PNG")
+        raise PrefixRuntimeError(f"LOAD_PNG failed: {exc}", location=location, rewrite_rule="LOAD_PNG")
 
 
 def _op_load_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     path: str = _expect_str(args[0], "LOAD_JPEG", location)
     _check_path(path, "LOAD_JPEG", location)
@@ -509,14 +509,14 @@ def _op_load_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _e
         w, h, pixels = _load_jpeg_file(path)
         _guard_image_size(w, h, "LOAD_JPEG", location)
         return _make_tensor_from_pixels(w, h, pixels, "LOAD_JPEG", location)
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"LOAD_JPEG failed: {exc}", location=location, rewrite_rule="LOAD_JPEG")
+        raise PrefixRuntimeError(f"LOAD_JPEG failed: {exc}", location=location, rewrite_rule="LOAD_JPEG")
 
 
 def _op_load_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     path: str = _expect_str(args[0], "LOAD_BMP", location)
     _check_path(path, "LOAD_BMP", location)
@@ -524,18 +524,18 @@ def _op_load_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _en
         w, h, pixels = _load_bmp_file(path)
         _guard_image_size(w, h, "LOAD_BMP", location)
         return _make_tensor_from_pixels(w, h, pixels, "LOAD_BMP", location)
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"LOAD_BMP failed: {exc}", location=location, rewrite_rule="LOAD_BMP")
+        raise PrefixRuntimeError(f"LOAD_BMP failed: {exc}", location=location, rewrite_rule="LOAD_BMP")
 
 
 def _op_blit(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, dest, x, y, mixalpha=1
     if len(args) < 4:
-        raise ASMRuntimeError("BLIT expects at least 4 arguments", location=location, rewrite_rule="BLIT")
+        raise PrefixRuntimeError("BLIT expects at least 4 arguments", location=location, rewrite_rule="BLIT")
     src = interpreter._expect_tns(args[0], "BLIT", location)
     dest = interpreter._expect_tns(args[1], "BLIT", location)
     x = interpreter._expect_int(args[2], "BLIT", location)
@@ -546,7 +546,7 @@ def _op_blit(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
 
     # Validate tensor shapes: expect 3D [w][h][4]
     if len(src.shape) != 3 or len(dest.shape) != 3 or src.shape[2] != 4 or dest.shape[2] != 4:
-        raise ASMRuntimeError("BLIT expects 3D image tensors with 4 channels", location=location, rewrite_rule="BLIT")
+        raise PrefixRuntimeError("BLIT expects 3D image tensors with 4 channels", location=location, rewrite_rule="BLIT")
 
     w_src, h_src, _ = src.shape
     w_dst, h_dst, _ = dest.shape
@@ -598,11 +598,11 @@ def _op_blit(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
 
 
 def _op_scale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, scale_x (width), scale_y (height), antialiasing=1
     if len(args) < 3:
-        raise ASMRuntimeError("SCALE expects at least 3 arguments", location=location, rewrite_rule="SCALE")
+        raise PrefixRuntimeError("SCALE expects at least 3 arguments", location=location, rewrite_rule="SCALE")
     src = interpreter._expect_tns(args[0], "SCALE", location)
     # scale_x/scale_y are floating-point values (FLT). They may be
     # treated as multiplicative factors when small, or as absolute
@@ -614,7 +614,7 @@ def _op_scale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: 
         antialiasing = interpreter._expect_int(args[3], "SCALE", location)
 
     if len(src.shape) != 3 or src.shape[2] != 4:
-        raise ASMRuntimeError("SCALE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SCALE")
+        raise PrefixRuntimeError("SCALE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SCALE")
     # Support two calling conventions:
     # - SCALE(src, target_w, target_h): absolute output dimensions
     # - SCALE(src, scale_x, scale_y) where small integers (e.g. 1,2) act as
@@ -633,7 +633,7 @@ def _op_scale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: 
         target_h = int(math.floor(float(scale_y)))
 
     if target_w <= 0 or target_h <= 0:
-        raise ASMRuntimeError("SCALE target dimensions must be positive", location=location, rewrite_rule="SCALE")
+        raise PrefixRuntimeError("SCALE target dimensions must be positive", location=location, rewrite_rule="SCALE")
     # Fast path: identical size -> return a copy
     if src_h == target_h and src_w == target_w:
         flat: np.ndarray = np.array(src.data.flat, dtype=object)
@@ -645,11 +645,11 @@ def _op_scale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: 
 
 
 def _op_resize(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # args: src, new_width, new_height, antialiasing=1 (antialiasing optional)
     if len(args) < 3:
-        raise ASMRuntimeError("RESIZE expects at least 3 arguments", location=location, rewrite_rule="RESIZE")
+        raise PrefixRuntimeError("RESIZE expects at least 3 arguments", location=location, rewrite_rule="RESIZE")
     src = interpreter._expect_tns(args[0], "RESIZE", location)
     target_w = interpreter._expect_int(args[1], "RESIZE", location)
     target_h = interpreter._expect_int(args[2], "RESIZE", location)
@@ -658,11 +658,11 @@ def _op_resize(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env:
         antialiasing = interpreter._expect_int(args[3], "RESIZE", location)
 
     if len(src.shape) != 3 or src.shape[2] != 4:
-        raise ASMRuntimeError("RESIZE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="RESIZE")
+        raise PrefixRuntimeError("RESIZE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="RESIZE")
 
     src_w, src_h, _ = src.shape
     if target_w <= 0 or target_h <= 0:
-        raise ASMRuntimeError("RESIZE target dimensions must be positive", location=location, rewrite_rule="RESIZE")
+        raise PrefixRuntimeError("RESIZE target dimensions must be positive", location=location, rewrite_rule="RESIZE")
     # Fast path: identical size -> return a copy
     if src_h == target_h and src_w == target_w:
         flat: np.ndarray = np.array(src.data.flat, dtype=object)
@@ -674,15 +674,15 @@ def _op_resize(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env:
 
 
 def _op_rotate(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
-        raise ASMRuntimeError("ROTATE expects 2 arguments", location=location, rewrite_rule="ROTATE")
+        raise PrefixRuntimeError("ROTATE expects 2 arguments", location=location, rewrite_rule="ROTATE")
     src = interpreter._expect_tns(args[0], "ROTATE", location)
     degrees = interpreter._expect_flt(args[1], "ROTATE", location)
 
     if len(src.shape) != 3 or src.shape[2] != 4:
-        raise ASMRuntimeError("ROTATE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="ROTATE")
+        raise PrefixRuntimeError("ROTATE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="ROTATE")
 
     w, h, _ = src.shape
     interpreter.builtins._ensure_tensor_ints(src, "ROTATE", location)
@@ -795,13 +795,13 @@ def _op_rotate(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env:
 
 
 def _op_grayscale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
-        raise ASMRuntimeError("GRAYSCALE expects 1 argument", location=location, rewrite_rule="GRAYSCALE")
+        raise PrefixRuntimeError("GRAYSCALE expects 1 argument", location=location, rewrite_rule="GRAYSCALE")
     img = interpreter._expect_tns(args[0], "GRAYSCALE", location)
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("GRAYSCALE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="GRAYSCALE")
+        raise PrefixRuntimeError("GRAYSCALE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="GRAYSCALE")
 
     w, h, _ = img.shape
     int_arr = _tensor_to_int_image(img, "GRAYSCALE", interpreter, location)
@@ -815,17 +815,17 @@ def _op_grayscale(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _e
 
 
 def _op_blur(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
-        raise ASMRuntimeError("BLUR expects 2 arguments", location=location, rewrite_rule="BLUR")
+        raise PrefixRuntimeError("BLUR expects 2 arguments", location=location, rewrite_rule="BLUR")
     img = interpreter._expect_tns(args[0], "BLUR", location)
     radius = interpreter._expect_int(args[1], "BLUR", location)
     if radius < 0:
-        raise ASMRuntimeError("BLUR radius must be >= 0", location=location, rewrite_rule="BLUR")
+        raise PrefixRuntimeError("BLUR radius must be >= 0", location=location, rewrite_rule="BLUR")
 
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("BLUR expects a 3D image tensor with 4 channels", location=location, rewrite_rule="BLUR")
+        raise PrefixRuntimeError("BLUR expects a 3D image tensor with 4 channels", location=location, rewrite_rule="BLUR")
 
     w, h, _ = img.shape
     if radius == 0 or h == 0 or w == 0:
@@ -854,11 +854,11 @@ def _op_blur(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
 
 
 def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_TNS, TYPE_INT, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_TNS, TYPE_INT, Tensor, Value
 
     # POLYGON(img, points, color, fill=1, thickness=1)
     if len(args) < 3:
-        raise ASMRuntimeError("POLYGON expects at least 3 arguments", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON expects at least 3 arguments", location=location, rewrite_rule="POLYGON")
     img = interpreter._expect_tns(args[0], "POLYGON", location)
     points = interpreter._expect_tns(args[1], "POLYGON", location)
     color_t = interpreter._expect_tns(args[2], "POLYGON", location)
@@ -871,13 +871,13 @@ def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
         thickness = interpreter._expect_int(args[4], "POLYGON", location)
 
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("POLYGON expects a 3D image tensor with 4 channels", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON expects a 3D image tensor with 4 channels", location=location, rewrite_rule="POLYGON")
     # points should be 2-D [N,2]
     if len(points.shape) != 2 or points.shape[1] != 2:
-        raise ASMRuntimeError("POLYGON points must be a 2-D TNS of [x,y] pairs", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON points must be a 2-D TNS of [x,y] pairs", location=location, rewrite_rule="POLYGON")
     n_points = int(points.shape[0])
     if n_points < 2:
-        raise ASMRuntimeError("POLYGON needs at least 2 points", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON needs at least 2 points", location=location, rewrite_rule="POLYGON")
 
     # Extract integer point coordinates (convert to 0-based)
     pts_arr = points.data.reshape(tuple(points.shape))
@@ -890,7 +890,7 @@ def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
 
     # First point must equal last
     if pts[0] != pts[-1]:
-        raise ASMRuntimeError("POLYGON: first point must equal last point", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON: first point must equal last point", location=location, rewrite_rule="POLYGON")
 
     w, h, _ = img.shape
     interpreter.builtins._ensure_tensor_ints(img, "POLYGON", location)
@@ -899,7 +899,7 @@ def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
 
     # Extract color
     if len(color_t.shape) != 1 or color_t.shape[0] != 4:
-        raise ASMRuntimeError("POLYGON color must be a 1-D TNS of length 4", location=location, rewrite_rule="POLYGON")
+        raise PrefixRuntimeError("POLYGON color must be a 1-D TNS of length 4", location=location, rewrite_rule="POLYGON")
     color_arr = color_t.data.reshape(tuple(color_t.shape))
     _expect_int = interpreter._expect_int
     r = _expect_int(color_arr[0], "POLYGON", location)
@@ -1013,10 +1013,10 @@ def _op_polygon(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
 
 
 def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_TNS, Tensor, Value
     # New signature: ELLIPSE(img, center:TNS[2], rx, ry, color:TNS[4], fill=1, thickness=1)
     if len(args) < 5:
-        raise ASMRuntimeError("ELLIPSE expects at least 5 arguments", location=location, rewrite_rule="ELLIPSE")
+        raise PrefixRuntimeError("ELLIPSE expects at least 5 arguments", location=location, rewrite_rule="ELLIPSE")
 
     img = interpreter._expect_tns(args[0], "ELLIPSE", location)
 
@@ -1026,7 +1026,7 @@ def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
     if getattr(second, "type", None) == TYPE_TNS:
         # New form: img, center:TNS, rx, ry, color, [fill], [thickness]
         if len(args) < 5:
-            raise ASMRuntimeError("ELLIPSE expects at least 5 arguments", location=location, rewrite_rule="ELLIPSE")
+            raise PrefixRuntimeError("ELLIPSE expects at least 5 arguments", location=location, rewrite_rule="ELLIPSE")
         center_t = interpreter._expect_tns(args[1], "ELLIPSE", location)
         rx = interpreter._expect_int(args[2], "ELLIPSE", location)
         ry = interpreter._expect_int(args[3], "ELLIPSE", location)
@@ -1035,7 +1035,7 @@ def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
     else:
         # Legacy form: img, cx, cy, rx, ry, color, [fill], [thickness]
         if len(args) < 6:
-            raise ASMRuntimeError("ELLIPSE expects at least 6 arguments (legacy form)", location=location, rewrite_rule="ELLIPSE")
+            raise PrefixRuntimeError("ELLIPSE expects at least 6 arguments (legacy form)", location=location, rewrite_rule="ELLIPSE")
         cx = interpreter._expect_int(args[1], "ELLIPSE", location)
         cy = interpreter._expect_int(args[2], "ELLIPSE", location)
         rx = interpreter._expect_int(args[3], "ELLIPSE", location)
@@ -1051,12 +1051,12 @@ def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
         thickness = interpreter._expect_int(args[arg_base + 1], "ELLIPSE", location)
 
     if rx <= 0 or ry <= 0:
-        raise ASMRuntimeError("ELLIPSE radii must be positive", location=location, rewrite_rule="ELLIPSE")
+        raise PrefixRuntimeError("ELLIPSE radii must be positive", location=location, rewrite_rule="ELLIPSE")
     if thickness <= 0:
-        raise ASMRuntimeError("ELLIPSE thickness must be positive", location=location, rewrite_rule="ELLIPSE")
+        raise PrefixRuntimeError("ELLIPSE thickness must be positive", location=location, rewrite_rule="ELLIPSE")
 
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("ELLIPSE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="ELLIPSE")
+        raise PrefixRuntimeError("ELLIPSE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="ELLIPSE")
 
     interpreter.builtins._ensure_tensor_ints(img, "ELLIPSE", location)
 
@@ -1065,7 +1065,7 @@ def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
     new_arr = arr.copy()
 
     if len(color_t.shape) != 1 or color_t.shape[0] != 4:
-        raise ASMRuntimeError("ELLIPSE color must be a 1-D TNS of length 4", location=location, rewrite_rule="ELLIPSE")
+        raise PrefixRuntimeError("ELLIPSE color must be a 1-D TNS of length 4", location=location, rewrite_rule="ELLIPSE")
     color_arr = color_t.data.reshape(tuple(color_t.shape))
     r = interpreter._expect_int(color_arr[0], "ELLIPSE", location)
     g = interpreter._expect_int(color_arr[1], "ELLIPSE", location)
@@ -1076,7 +1076,7 @@ def _op_ellipse(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env
     # If center tensor was provided, extract cx, cy; otherwise use legacy values
     if center_t is not None:
         if len(center_t.shape) != 1 or center_t.shape[0] < 2:
-            raise ASMRuntimeError("ELLIPSE center must be a 1-D TNS of length >= 2", location=location, rewrite_rule="ELLIPSE")
+            raise PrefixRuntimeError("ELLIPSE center must be a 1-D TNS of length >= 2", location=location, rewrite_rule="ELLIPSE")
         center_arr = center_t.data.reshape(tuple(center_t.shape))
         cx = interpreter._expect_int(center_arr[0], "ELLIPSE", location)
         cy = interpreter._expect_int(center_arr[1], "ELLIPSE", location)
@@ -1215,14 +1215,14 @@ def _save_with_gdiplus(path: str, width: int, height: int, pixels: List[int], fm
 
 
 def _op_save_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_TNS, TYPE_STR, Value
+    from interpreter import PrefixRuntimeError, TYPE_TNS, TYPE_STR, Value
 
     if len(args) < 2:
-        raise ASMRuntimeError("SAVE_BMP expects 2 arguments", location=location, rewrite_rule="SAVE_BMP")
+        raise PrefixRuntimeError("SAVE_BMP expects 2 arguments", location=location, rewrite_rule="SAVE_BMP")
     t = interpreter._expect_tns(args[0], "SAVE_BMP", location)
     path: str = _expect_str(args[1], "SAVE_BMP", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
-        raise ASMRuntimeError("SAVE_BMP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_BMP")
+        raise PrefixRuntimeError("SAVE_BMP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_BMP")
     w, h, _ = t.shape
     interpreter.builtins._ensure_tensor_ints(t, "SAVE_BMP", location)
     flat = []
@@ -1236,20 +1236,20 @@ def _op_save_bmp(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _en
     try:
         _write_bmp_file(path, w, h, flat)
     except Exception as exc:
-        raise ASMRuntimeError(f"SAVE_BMP failed: {exc}", location=location, rewrite_rule="SAVE_BMP")
+        raise PrefixRuntimeError(f"SAVE_BMP failed: {exc}", location=location, rewrite_rule="SAVE_BMP")
     return Value(TYPE_STR, "OK")
 
 
 def _op_save_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_STR, Value
+    from interpreter import PrefixRuntimeError, TYPE_STR, Value
 
     if len(args) < 3:
-        raise ASMRuntimeError("SAVE_PNG expects 3 arguments", location=location, rewrite_rule="SAVE_PNG")
+        raise PrefixRuntimeError("SAVE_PNG expects 3 arguments", location=location, rewrite_rule="SAVE_PNG")
     t = interpreter._expect_tns(args[0], "SAVE_PNG", location)
     path: str = _expect_str(args[1], "SAVE_PNG", location)
     level = interpreter._expect_int(args[2], "SAVE_PNG", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
-        raise ASMRuntimeError("SAVE_PNG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_PNG")
+        raise PrefixRuntimeError("SAVE_PNG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_PNG")
     w, h, _ = t.shape
     interpreter.builtins._ensure_tensor_ints(t, "SAVE_PNG", location)
     arr = t.data.reshape(tuple(t.shape))
@@ -1276,20 +1276,20 @@ def _op_save_png(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _en
             _save_with_gdiplus(path, w, h, list(flat), "PNG", quality=None)
             return Value(TYPE_STR, "OK")
         except Exception as exc:
-            raise ASMRuntimeError(f"SAVE_PNG failed: {exc}", location=location, rewrite_rule="SAVE_PNG")
-    raise ASMRuntimeError("SAVE_PNG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_PNG")
+            raise PrefixRuntimeError(f"SAVE_PNG failed: {exc}", location=location, rewrite_rule="SAVE_PNG")
+    raise PrefixRuntimeError("SAVE_PNG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_PNG")
 
 
 def _op_save_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_STR, Value
+    from interpreter import PrefixRuntimeError, TYPE_STR, Value
 
     if len(args) < 3:
-        raise ASMRuntimeError("SAVE_JPEG expects 3 arguments", location=location, rewrite_rule="SAVE_JPEG")
+        raise PrefixRuntimeError("SAVE_JPEG expects 3 arguments", location=location, rewrite_rule="SAVE_JPEG")
     t = interpreter._expect_tns(args[0], "SAVE_JPEG", location)
     path: str = _expect_str(args[1], "SAVE_JPEG", location)
     quality = interpreter._expect_int(args[2], "SAVE_JPEG", location)
     if len(t.shape) != 3 or t.shape[2] != 4:
-        raise ASMRuntimeError("SAVE_JPEG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_JPEG")
+        raise PrefixRuntimeError("SAVE_JPEG expects a 3D image tensor with 4 channels", location=location, rewrite_rule="SAVE_JPEG")
     w, h, _ = t.shape
     interpreter.builtins._ensure_tensor_ints(t, "SAVE_JPEG", location)
     arr = t.data.reshape(tuple(t.shape))
@@ -1326,17 +1326,17 @@ def _op_save_jpeg(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _e
             _save_with_gdiplus(path, w, h, rgba, "JPEG", quality=int(quality))
             return Value(TYPE_STR, "OK")
         except Exception as exc:
-            raise ASMRuntimeError(f"SAVE_JPEG failed: {exc}", location=location, rewrite_rule="SAVE_JPEG")
-    raise ASMRuntimeError("SAVE_JPEG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_JPEG")
+            raise PrefixRuntimeError(f"SAVE_JPEG failed: {exc}", location=location, rewrite_rule="SAVE_JPEG")
+    raise PrefixRuntimeError("SAVE_JPEG not supported on this platform (install Pillow or use Windows)", location=location, rewrite_rule="SAVE_JPEG")
 
 
 # ---- Registration ----
 
 def _op_replace_color(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 3:
-        raise ASMRuntimeError("REPLACE_COLOR expects 3 arguments", location=location, rewrite_rule="REPLACE_COLOR")
+        raise PrefixRuntimeError("REPLACE_COLOR expects 3 arguments", location=location, rewrite_rule="REPLACE_COLOR")
     # Keep the original Value for the fast-return case
     img_val = args[0]
     img = interpreter._expect_tns(img_val, "REPLACE_COLOR", location)
@@ -1345,12 +1345,12 @@ def _op_replace_color(interpreter: Any, args: List[Value], _arg_nodes: List[Any]
 
     # Colors may be length 3 (RGB) or 4 (RGBA)
     if len(src_col_t.shape) != 1 or src_col_t.shape[0] not in (3, 4):
-        raise ASMRuntimeError("REPLACE_COLOR: src_color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule="REPLACE_COLOR")
+        raise PrefixRuntimeError("REPLACE_COLOR: src_color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule="REPLACE_COLOR")
     if len(dst_col_t.shape) != 1 or dst_col_t.shape[0] not in (3, 4):
-        raise ASMRuntimeError("REPLACE_COLOR: dst_color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule="REPLACE_COLOR")
+        raise PrefixRuntimeError("REPLACE_COLOR: dst_color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule="REPLACE_COLOR")
 
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("REPLACE_COLOR expects a 3D image tensor with 4 channels", location=location, rewrite_rule="REPLACE_COLOR")
+        raise PrefixRuntimeError("REPLACE_COLOR expects a 3D image tensor with 4 channels", location=location, rewrite_rule="REPLACE_COLOR")
 
     # Convert to a compact integer view for fast vectorized comparisons
     img_int = _tensor_to_int_image(img, "REPLACE_COLOR", interpreter, location)
@@ -1408,10 +1408,10 @@ def _op_replace_color(interpreter: Any, args: List[Value], _arg_nodes: List[Any]
 
 
 def _op_thresh_generic(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any, channel: int, rule: str) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) < 2:
-        raise ASMRuntimeError(f"{rule} expects at least 2 arguments", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects at least 2 arguments", location=location, rewrite_rule=rule)
     img = interpreter._expect_tns(args[0], rule, location)
     thresh = interpreter._expect_int(args[1], rule, location)
 
@@ -1421,7 +1421,7 @@ def _op_thresh_generic(interpreter: Any, args: List[Value], _arg_nodes: List[Any
     if len(args) >= 3:
         color_t = interpreter._expect_tns(args[2], rule, location)
         if len(color_t.shape) != 1 or color_t.shape[0] not in (3, 4):
-            raise ASMRuntimeError(f"{rule}: color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule}: color must be a 1-D TNS length 3 or 4", location=location, rewrite_rule=rule)
         carr = color_t.data.reshape(tuple(color_t.shape))
         d_r = interpreter._expect_int(carr[0], rule, location)
         d_g = interpreter._expect_int(carr[1], rule, location)
@@ -1433,7 +1433,7 @@ def _op_thresh_generic(interpreter: Any, args: List[Value], _arg_nodes: List[Any
             d_has_alpha = False
 
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError(f"{rule} expects a 3D image tensor with 4 channels", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects a 3D image tensor with 4 channels", location=location, rewrite_rule=rule)
 
     w, h, _ = img.shape
     arr_int = _tensor_to_int_image(img, rule, interpreter, location)
@@ -1466,11 +1466,11 @@ def _op_thresh_b(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _en
 
 
 def _op_render_text(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     # Signature: RENDER_TEXT(STR: text, INT: size, STR: font_path = "", TNS: color = [11111111,11111111,11111111,11111111], TNS: bgcolor = [11111111,11111111,11111111,11111111], INT: antialiasing = 1):TNS
     if len(args) < 2:
-        raise ASMRuntimeError("RENDER_TEXT expects at least 2 arguments", location=location, rewrite_rule="RENDER_TEXT")
+        raise PrefixRuntimeError("RENDER_TEXT expects at least 2 arguments", location=location, rewrite_rule="RENDER_TEXT")
 
     text: str = _expect_str(args[0], "RENDER_TEXT", location)
     size = interpreter._expect_int(args[1], "RENDER_TEXT", location)
@@ -1482,9 +1482,9 @@ def _op_render_text(interpreter: Any, args: List[Value], _arg_nodes: List[Any], 
     # default color/background: binary literal 11111111 == 255 each channel
     def _tns_to_rgba(tns_val, name: str) -> Tuple[int, int, int, int]:
         if getattr(tns_val, "type", None) != TYPE_TNS:
-            raise ASMRuntimeError(f"{name} must be a TNS of length 4", location=location, rewrite_rule="RENDER_TEXT")
+            raise PrefixRuntimeError(f"{name} must be a TNS of length 4", location=location, rewrite_rule="RENDER_TEXT")
         if len(tns_val.shape) != 1 or tns_val.shape[0] != 4:
-            raise ASMRuntimeError(f"{name} must be a 1-D TNS of length 4", location=location, rewrite_rule="RENDER_TEXT")
+            raise PrefixRuntimeError(f"{name} must be a 1-D TNS of length 4", location=location, rewrite_rule="RENDER_TEXT")
         arr = tns_val.data.reshape(tuple(tns_val.shape))
         r = interpreter._expect_int(arr[0], "RENDER_TEXT", location)
         g = interpreter._expect_int(arr[1], "RENDER_TEXT", location)
@@ -1882,22 +1882,22 @@ def _op_render_text(interpreter: Any, args: List[Value], _arg_nodes: List[Any], 
 
         _guard_image_size(tex_w, tex_h, "RENDER_TEXT", location)
         return _make_tensor_from_pixels(tex_w, tex_h, pixels, "RENDER_TEXT", location)
-    except ASMRuntimeError:
+    except PrefixRuntimeError:
         raise
     except Exception as exc:
-        raise ASMRuntimeError(f"RENDER_TEXT failed: {exc}", location=location, rewrite_rule="RENDER_TEXT")
+        raise PrefixRuntimeError(f"RENDER_TEXT failed: {exc}", location=location, rewrite_rule="RENDER_TEXT")
 
 def _op_crop(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 2:
-        raise ASMRuntimeError("CROP expects 2 arguments", location=location, rewrite_rule="CROP")
+        raise PrefixRuntimeError("CROP expects 2 arguments", location=location, rewrite_rule="CROP")
     img = interpreter._expect_tns(args[0], "CROP", location)
     corners = interpreter._expect_tns(args[1], "CROP", location)
 
     # corners should be a 2-D tensor with at least 4 rows and 2 columns
     if len(corners.shape) != 2 or corners.shape[1] < 2 or corners.shape[0] < 4:
-        raise ASMRuntimeError("CROP: corners must be a 2-D TNS of shape [N,2] with N>=4", location=location, rewrite_rule="CROP")
+        raise PrefixRuntimeError("CROP: corners must be a 2-D TNS of shape [N,2] with N>=4", location=location, rewrite_rule="CROP")
 
     pts_arr = corners.data.reshape(tuple(corners.shape))
     coords: List[Tuple[int, int]] = []
@@ -1917,7 +1917,7 @@ def _op_crop(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
 
     # Validate source image
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("CROP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="CROP")
+        raise PrefixRuntimeError("CROP expects a 3D image tensor with 4 channels", location=location, rewrite_rule="CROP")
 
     w_src, h_src, _ = img.shape
 
@@ -1928,7 +1928,7 @@ def _op_crop(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
     bottom0: int = min(h_src - 1, bottom - 1)
 
     if right0 < left0 or bottom0 < top0:
-        raise ASMRuntimeError("CROP: invalid crop rectangle", location=location, rewrite_rule="CROP")
+        raise PrefixRuntimeError("CROP: invalid crop rectangle", location=location, rewrite_rule="CROP")
 
     out_w: int = right0 - left0 + 1
     out_h: int = bottom0 - top0 + 1
@@ -1956,15 +1956,15 @@ def _op_crop(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
 
 
 def _op_invert(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
-        raise ASMRuntimeError("INVERT expects 1 argument", location=location, rewrite_rule="INVERT")
+        raise PrefixRuntimeError("INVERT expects 1 argument", location=location, rewrite_rule="INVERT")
     img = interpreter._expect_tns(args[0], "INVERT", location)
 
     # Expect a 3D image tensor with 4 channels (RGBA)
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("INVERT expects a 3D image tensor with 4 channels", location=location, rewrite_rule="INVERT")
+        raise PrefixRuntimeError("INVERT expects a 3D image tensor with 4 channels", location=location, rewrite_rule="INVERT")
 
     w, h, _ = img.shape
     int_arr = _tensor_to_int_image(img, "INVERT", interpreter, location)
@@ -1996,15 +1996,15 @@ def _op_invert(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env:
 
 
 def _op_edge(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 1:
-        raise ASMRuntimeError("EDGE expects 1 argument", location=location, rewrite_rule="EDGE")
+        raise PrefixRuntimeError("EDGE expects 1 argument", location=location, rewrite_rule="EDGE")
     img = interpreter._expect_tns(args[0], "EDGE", location)
 
     # Expect a 3D image tensor with 4 channels (RGBA)
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("EDGE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="EDGE")
+        raise PrefixRuntimeError("EDGE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="EDGE")
 
     w, h, _ = img.shape
     interpreter.builtins._ensure_tensor_ints(img, "EDGE", location)
@@ -2108,16 +2108,16 @@ def _op_edge(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: A
     return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
 
 def _op_cellshade(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _env: Any, location: Any) -> Value:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor, Value
 
     if len(args) != 2:
-        raise ASMRuntimeError("CELLSHADE expects 2 arguments", location=location, rewrite_rule="CELLSHADE")
+        raise PrefixRuntimeError("CELLSHADE expects 2 arguments", location=location, rewrite_rule="CELLSHADE")
     img = interpreter._expect_tns(args[0], "CELLSHADE", location)
     palette = interpreter._expect_tns(args[1], "CELLSHADE", location)
 
     # Expect a 3D image tensor with 4 channels (RGBA)
     if len(img.shape) != 3 or img.shape[2] != 4:
-        raise ASMRuntimeError("CELLSHADE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="CELLSHADE")
+        raise PrefixRuntimeError("CELLSHADE expects a 3D image tensor with 4 channels", location=location, rewrite_rule="CELLSHADE")
 
     w, h, _ = img.shape
     interpreter.builtins._ensure_tensor_ints(img, "CELLSHADE", location)
@@ -2135,7 +2135,7 @@ def _op_cellshade(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _e
             for j in range(palette.shape[1]):
                 pal_np[i, j] = interpreter._expect_int(pal_view[i, j], "CELLSHADE", location)
     else:
-        raise ASMRuntimeError("CELLSHADE: colors must be a TNS of shape [N,3] or [N,4] or a single 1-D color", location=location, rewrite_rule="CELLSHADE")
+        raise PrefixRuntimeError("CELLSHADE: colors must be a TNS of shape [N,3] or [N,4] or a single 1-D color", location=location, rewrite_rule="CELLSHADE")
 
     # Separate RGB and optional alpha
     if pal_np.shape[1] == 3:
@@ -2179,7 +2179,7 @@ def _op_cellshade(interpreter: Any, args: List[Value], _arg_nodes: List[Any], _e
     data: np.ndarray = np.array(flat_objs, dtype=object)
     return Value(TYPE_TNS, Tensor(shape=[w, h, 4], data=data))
 
-def asm_lang_register(ext: ExtensionAPI) -> None:
+def prefix_register(ext: ExtensionAPI) -> None:
     ext.metadata(name="image", version="0.1.0")
     ext.register_operator("LOAD_PNG", 1, 1, _op_load_png, doc="LOAD_PNG(path):TNS[width][height][r,g,b,a]")
     ext.register_operator("LOAD_JPEG", 1, 1, _op_load_jpeg, doc="LOAD_JPEG(path):TNS[width][height][r,g,b,a]")

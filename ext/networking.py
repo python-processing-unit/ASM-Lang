@@ -1,4 +1,4 @@
-"""ASM-Lang extension: networking utilities.
+"""Prefix extension: networking utilities.
 
 This extension provides a pragmatic, stdlib-first set of networking operators:
 
@@ -35,27 +35,27 @@ import numpy as np
 from extensions import ExtensionAPI
 
 
-ASM_LANG_EXTENSION_NAME = "networking"
-ASM_LANG_EXTENSION_API_VERSION = 1
-ASM_LANG_EXTENSION_ASMODULE = True
+PREFIX_EXTENSION_NAME = "networking"
+PREFIX_EXTENSION_API_VERSION = 1
+PREFIX_EXTENSION_ASMODULE = True
 
 
 # ---- Value helpers (import lazily inside operators to avoid cycles) ----
 
 
 def _expect_int(v: Any, rule: str, location: Any) -> int:
-    from interpreter import ASMRuntimeError, TYPE_INT
+    from interpreter import PrefixRuntimeError, TYPE_INT
 
     if getattr(v, "type", None) != TYPE_INT:
-        raise ASMRuntimeError(f"{rule} expects INT", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects INT", location=location, rewrite_rule=rule)
     return int(v.value)
 
 
 def _expect_str(v: Any, rule: str, location: Any) -> str:
-    from interpreter import ASMRuntimeError, TYPE_STR
+    from interpreter import PrefixRuntimeError, TYPE_STR
 
     if getattr(v, "type", None) != TYPE_STR:
-        raise ASMRuntimeError(f"{rule} expects STR", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects STR", location=location, rewrite_rule=rule)
     return str(v.value)
 
 
@@ -83,20 +83,20 @@ def _bytes_to_tns(data: bytes) -> Any:
 
 
 def _tns_to_bytes(v: Any, rule: str, location: Any) -> bytes:
-    from interpreter import ASMRuntimeError, TYPE_INT, TYPE_TNS, Tensor
+    from interpreter import PrefixRuntimeError, TYPE_INT, TYPE_TNS, Tensor
 
     if getattr(v, "type", None) != TYPE_TNS or not isinstance(v.value, Tensor):
-        raise ASMRuntimeError(f"{rule} expects TNS byte array", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects TNS byte array", location=location, rewrite_rule=rule)
     tensor = v.value
     if len(tensor.shape) != 1:
-        raise ASMRuntimeError(f"{rule} expects a 1D tensor", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule} expects a 1D tensor", location=location, rewrite_rule=rule)
     out = bytearray()
     for entry in tensor.data.flat:
         if getattr(entry, "type", None) != TYPE_INT:
-            raise ASMRuntimeError(f"{rule} tensor entries must be INT", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} tensor entries must be INT", location=location, rewrite_rule=rule)
         b = int(entry.value)
         if b < 0 or b > 255:
-            raise ASMRuntimeError(f"{rule} tensor entries must be in [0,255]", location=location, rewrite_rule=rule)
+            raise PrefixRuntimeError(f"{rule} tensor entries must be in [0,255]", location=location, rewrite_rule=rule)
         out.append(b)
     return bytes(out)
 
@@ -145,11 +145,11 @@ def _alloc_handle(st: _NetState) -> int:
 
 
 def _get_handle(map_: Dict[int, socket.socket], hid: int, rule: str, location: Any) -> socket.socket:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     sock = map_.get(hid)
     if sock is None:
-        raise ASMRuntimeError(f"{rule}: invalid handle", location=location, rewrite_rule=rule)
+        raise PrefixRuntimeError(f"{rule}: invalid handle", location=location, rewrite_rule=rule)
     return sock
 
 
@@ -165,7 +165,7 @@ def _ssl_context(*, verify: bool) -> ssl.SSLContext:
 # ---- TCP ----
 
 def _tcp_connect(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "TCP_CONNECT", location)
     port = _expect_int(args[1], "TCP_CONNECT", location)
@@ -176,7 +176,7 @@ def _tcp_connect(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env:
     server_hostname = _expect_str(args[5], "TCP_CONNECT", location) if len(args) >= 6 else host
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("TCP_CONNECT: port out of range", location=location, rewrite_rule="TCP_CONNECT")
+        raise PrefixRuntimeError("TCP_CONNECT: port out of range", location=location, rewrite_rule="TCP_CONNECT")
 
     timeout_s = _ms_to_seconds(timeout_ms)
 
@@ -190,7 +190,7 @@ def _tcp_connect(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env:
         else:
             sock = raw
     except Exception as exc:
-        raise ASMRuntimeError(f"TCP_CONNECT failed: {exc}", location=location, rewrite_rule="TCP_CONNECT")
+        raise PrefixRuntimeError(f"TCP_CONNECT failed: {exc}", location=location, rewrite_rule="TCP_CONNECT")
 
     st = _state(interpreter)
     hid = _alloc_handle(st)
@@ -199,7 +199,7 @@ def _tcp_connect(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env:
 
 
 def _tcp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "TCP_SEND", location)
     payload = _expect_str(args[1], "TCP_SEND", location)
@@ -213,55 +213,55 @@ def _tcp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
         sent = sock.send(data)
         return _make_int(sent)
     except Exception as exc:
-        raise ASMRuntimeError(f"TCP_SEND failed: {exc}", location=location, rewrite_rule="TCP_SEND")
+        raise PrefixRuntimeError(f"TCP_SEND failed: {exc}", location=location, rewrite_rule="TCP_SEND")
 
 
 def _tcp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "TCP_RECV_TEXT", location)
     max_bytes = _expect_int(args[1], "TCP_RECV_TEXT", location)
     coding = _expect_str(args[2], "TCP_RECV_TEXT", location) if len(args) >= 3 else "UTF-8"
 
     if max_bytes <= 0:
-        raise ASMRuntimeError("TCP_RECV_TEXT: max_bytes must be > 0", location=location, rewrite_rule="TCP_RECV_TEXT")
+        raise PrefixRuntimeError("TCP_RECV_TEXT: max_bytes must be > 0", location=location, rewrite_rule="TCP_RECV_TEXT")
 
     sock = _get_handle(_state(interpreter).tcp, hid, "TCP_RECV_TEXT", location)
     try:
         data = sock.recv(max_bytes)
     except Exception as exc:
-        raise ASMRuntimeError(f"TCP_RECV_TEXT failed: {exc}", location=location, rewrite_rule="TCP_RECV_TEXT")
+        raise PrefixRuntimeError(f"TCP_RECV_TEXT failed: {exc}", location=location, rewrite_rule="TCP_RECV_TEXT")
 
     enc = _normalize_encoding(coding)
     return _make_str(data.decode(enc, errors="replace"))
 
 
 def _tcp_recv_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "TCP_RECV_BYTES", location)
     max_bytes = _expect_int(args[1], "TCP_RECV_BYTES", location)
 
     if max_bytes <= 0:
-        raise ASMRuntimeError("TCP_RECV_BYTES: max_bytes must be > 0", location=location, rewrite_rule="TCP_RECV_BYTES")
+        raise PrefixRuntimeError("TCP_RECV_BYTES: max_bytes must be > 0", location=location, rewrite_rule="TCP_RECV_BYTES")
 
     sock = _get_handle(_state(interpreter).tcp, hid, "TCP_RECV_BYTES", location)
     try:
         data = sock.recv(max_bytes)
     except Exception as exc:
-        raise ASMRuntimeError(f"TCP_RECV_BYTES failed: {exc}", location=location, rewrite_rule="TCP_RECV_BYTES")
+        raise PrefixRuntimeError(f"TCP_RECV_BYTES failed: {exc}", location=location, rewrite_rule="TCP_RECV_BYTES")
 
     return _bytes_to_tns(data)
 
 
 def _tcp_close(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "TCP_CLOSE", location)
     st = _state(interpreter)
     sock = st.tcp.pop(hid, None)
     if sock is None:
-        raise ASMRuntimeError("TCP_CLOSE: invalid handle", location=location, rewrite_rule="TCP_CLOSE")
+        raise PrefixRuntimeError("TCP_CLOSE: invalid handle", location=location, rewrite_rule="TCP_CLOSE")
     try:
         sock.close()
     except Exception:
@@ -273,14 +273,14 @@ def _tcp_close(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: A
 
 
 def _udp_bind(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "UDP_BIND", location)
     port = _expect_int(args[1], "UDP_BIND", location)
     timeout_ms = _expect_int(args[2], "UDP_BIND", location) if len(args) >= 3 else 0
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("UDP_BIND: port out of range", location=location, rewrite_rule="UDP_BIND")
+        raise PrefixRuntimeError("UDP_BIND: port out of range", location=location, rewrite_rule="UDP_BIND")
 
     timeout_s = _ms_to_seconds(timeout_ms)
 
@@ -290,7 +290,7 @@ def _udp_bind(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
             sock.settimeout(timeout_s)
         sock.bind((host, port))
     except Exception as exc:
-        raise ASMRuntimeError(f"UDP_BIND failed: {exc}", location=location, rewrite_rule="UDP_BIND")
+        raise PrefixRuntimeError(f"UDP_BIND failed: {exc}", location=location, rewrite_rule="UDP_BIND")
 
     st = _state(interpreter)
     hid = _alloc_handle(st)
@@ -299,7 +299,7 @@ def _udp_bind(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
 
 
 def _udp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "UDP_SEND", location)
     host = _expect_str(args[1], "UDP_SEND", location)
@@ -308,7 +308,7 @@ def _udp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
     coding = _expect_str(args[4], "UDP_SEND", location) if len(args) >= 5 else "UTF-8"
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("UDP_SEND: port out of range", location=location, rewrite_rule="UDP_SEND")
+        raise PrefixRuntimeError("UDP_SEND: port out of range", location=location, rewrite_rule="UDP_SEND")
 
     sock = _get_handle(_state(interpreter).udp, hid, "UDP_SEND", location)
     enc = _normalize_encoding(coding)
@@ -317,11 +317,11 @@ def _udp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
         sent = sock.sendto(data, (host, port))
         return _make_int(sent)
     except Exception as exc:
-        raise ASMRuntimeError(f"UDP_SEND failed: {exc}", location=location, rewrite_rule="UDP_SEND")
+        raise PrefixRuntimeError(f"UDP_SEND failed: {exc}", location=location, rewrite_rule="UDP_SEND")
 
 
 def _udp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "UDP_RECV_TEXT", location)
     max_bytes = _expect_int(args[1], "UDP_RECV_TEXT", location)
@@ -329,7 +329,7 @@ def _udp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
     coding = _expect_str(args[3], "UDP_RECV_TEXT", location) if len(args) >= 4 else "UTF-8"
 
     if max_bytes <= 0:
-        raise ASMRuntimeError("UDP_RECV_TEXT: max_bytes must be > 0", location=location, rewrite_rule="UDP_RECV_TEXT")
+        raise PrefixRuntimeError("UDP_RECV_TEXT: max_bytes must be > 0", location=location, rewrite_rule="UDP_RECV_TEXT")
 
     sock = _get_handle(_state(interpreter).udp, hid, "UDP_RECV_TEXT", location)
     timeout_s = _ms_to_seconds(timeout_ms)
@@ -339,21 +339,21 @@ def _udp_recv_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
     try:
         data, _addr = sock.recvfrom(max_bytes)
     except Exception as exc:
-        raise ASMRuntimeError(f"UDP_RECV_TEXT failed: {exc}", location=location, rewrite_rule="UDP_RECV_TEXT")
+        raise PrefixRuntimeError(f"UDP_RECV_TEXT failed: {exc}", location=location, rewrite_rule="UDP_RECV_TEXT")
 
     enc = _normalize_encoding(coding)
     return _make_str(data.decode(enc, errors="replace"))
 
 
 def _udp_recv_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "UDP_RECV_BYTES", location)
     max_bytes = _expect_int(args[1], "UDP_RECV_BYTES", location)
     timeout_ms = _expect_int(args[2], "UDP_RECV_BYTES", location) if len(args) >= 3 else 0
 
     if max_bytes <= 0:
-        raise ASMRuntimeError("UDP_RECV_BYTES: max_bytes must be > 0", location=location, rewrite_rule="UDP_RECV_BYTES")
+        raise PrefixRuntimeError("UDP_RECV_BYTES: max_bytes must be > 0", location=location, rewrite_rule="UDP_RECV_BYTES")
 
     sock = _get_handle(_state(interpreter).udp, hid, "UDP_RECV_BYTES", location)
     timeout_s = _ms_to_seconds(timeout_ms)
@@ -363,19 +363,19 @@ def _udp_recv_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _e
     try:
         data, _addr = sock.recvfrom(max_bytes)
     except Exception as exc:
-        raise ASMRuntimeError(f"UDP_RECV_BYTES failed: {exc}", location=location, rewrite_rule="UDP_RECV_BYTES")
+        raise PrefixRuntimeError(f"UDP_RECV_BYTES failed: {exc}", location=location, rewrite_rule="UDP_RECV_BYTES")
 
     return _bytes_to_tns(data)
 
 
 def _udp_close(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     hid = _expect_int(args[0], "UDP_CLOSE", location)
     st = _state(interpreter)
     sock = st.udp.pop(hid, None)
     if sock is None:
-        raise ASMRuntimeError("UDP_CLOSE: invalid handle", location=location, rewrite_rule="UDP_CLOSE")
+        raise PrefixRuntimeError("UDP_CLOSE: invalid handle", location=location, rewrite_rule="UDP_CLOSE")
     try:
         sock.close()
     except Exception:
@@ -401,7 +401,7 @@ def _http_request_bytes(method: str, url: str, *, body: Optional[bytes], content
 
 
 def _http_get_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_TEXT", location)
     timeout_ms = _expect_int(args[1], "HTTP_GET_TEXT", location) if len(args) >= 2 else 5000
@@ -410,13 +410,13 @@ def _http_get_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
     try:
         _status, data = _http_request_bytes("GET", url, body=None, content_type=None, timeout_ms=timeout_ms, verify=verify != 0)
     except Exception as exc:
-        raise ASMRuntimeError(f"HTTP_GET_TEXT failed: {exc}", location=location, rewrite_rule="HTTP_GET_TEXT")
+        raise PrefixRuntimeError(f"HTTP_GET_TEXT failed: {exc}", location=location, rewrite_rule="HTTP_GET_TEXT")
 
     return _make_str(data.decode("utf-8", errors="replace"))
 
 
 def _http_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_BYTES", location)
     timeout_ms = _expect_int(args[1], "HTTP_GET_BYTES", location) if len(args) >= 2 else 5000
@@ -425,13 +425,13 @@ def _http_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _e
     try:
         _status, data = _http_request_bytes("GET", url, body=None, content_type=None, timeout_ms=timeout_ms, verify=verify != 0)
     except Exception as exc:
-        raise ASMRuntimeError(f"HTTP_GET_BYTES failed: {exc}", location=location, rewrite_rule="HTTP_GET_BYTES")
+        raise PrefixRuntimeError(f"HTTP_GET_BYTES failed: {exc}", location=location, rewrite_rule="HTTP_GET_BYTES")
 
     return _bytes_to_tns(data)
 
 
 def _http_get_status(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     url = _expect_str(args[0], "HTTP_GET_STATUS", location)
     timeout_ms = _expect_int(args[1], "HTTP_GET_STATUS", location) if len(args) >= 2 else 5000
@@ -440,13 +440,13 @@ def _http_get_status(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _
     try:
         status, _data = _http_request_bytes("GET", url, body=None, content_type=None, timeout_ms=timeout_ms, verify=verify != 0)
     except Exception as exc:
-        raise ASMRuntimeError(f"HTTP_GET_STATUS failed: {exc}", location=location, rewrite_rule="HTTP_GET_STATUS")
+        raise PrefixRuntimeError(f"HTTP_GET_STATUS failed: {exc}", location=location, rewrite_rule="HTTP_GET_STATUS")
 
     return _make_int(status)
 
 
 def _http_post_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     url = _expect_str(args[0], "HTTP_POST_TEXT", location)
     body_str = _expect_str(args[1], "HTTP_POST_TEXT", location)
@@ -464,7 +464,7 @@ def _http_post_text(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _e
             verify=verify != 0,
         )
     except Exception as exc:
-        raise ASMRuntimeError(f"HTTP_POST_TEXT failed: {exc}", location=location, rewrite_rule="HTTP_POST_TEXT")
+        raise PrefixRuntimeError(f"HTTP_POST_TEXT failed: {exc}", location=location, rewrite_rule="HTTP_POST_TEXT")
 
     return _make_str(data.decode("utf-8", errors="replace"))
 
@@ -496,7 +496,7 @@ def _ftp_login(host: str, port: int, user: str, password: str, *, tls: bool, tim
 
 
 def _ftp_list(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "FTP_LIST", location)
     port = _expect_int(args[1], "FTP_LIST", location)
@@ -508,7 +508,7 @@ def _ftp_list(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
     verify = _expect_int(args[7], "FTP_LIST", location) if len(args) >= 8 else 1
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("FTP_LIST: port out of range", location=location, rewrite_rule="FTP_LIST")
+        raise PrefixRuntimeError("FTP_LIST: port out of range", location=location, rewrite_rule="FTP_LIST")
 
     timeout_s = _ms_to_seconds(timeout_ms)
 
@@ -524,11 +524,11 @@ def _ftp_list(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: An
                 ftp.close()
         return _make_str("\n".join(lines))
     except Exception as exc:
-        raise ASMRuntimeError(f"FTP_LIST failed: {exc}", location=location, rewrite_rule="FTP_LIST")
+        raise PrefixRuntimeError(f"FTP_LIST failed: {exc}", location=location, rewrite_rule="FTP_LIST")
 
 
 def _ftp_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "FTP_GET_BYTES", location)
     port = _expect_int(args[1], "FTP_GET_BYTES", location)
@@ -540,7 +540,7 @@ def _ftp_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
     verify = _expect_int(args[7], "FTP_GET_BYTES", location) if len(args) >= 8 else 1
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("FTP_GET_BYTES: port out of range", location=location, rewrite_rule="FTP_GET_BYTES")
+        raise PrefixRuntimeError("FTP_GET_BYTES: port out of range", location=location, rewrite_rule="FTP_GET_BYTES")
 
     timeout_s = _ms_to_seconds(timeout_ms)
 
@@ -556,11 +556,11 @@ def _ftp_get_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
                 ftp.close()
         return _bytes_to_tns(buf.getvalue())
     except Exception as exc:
-        raise ASMRuntimeError(f"FTP_GET_BYTES failed: {exc}", location=location, rewrite_rule="FTP_GET_BYTES")
+        raise PrefixRuntimeError(f"FTP_GET_BYTES failed: {exc}", location=location, rewrite_rule="FTP_GET_BYTES")
 
 
 def _ftp_put_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "FTP_PUT_BYTES", location)
     port = _expect_int(args[1], "FTP_PUT_BYTES", location)
@@ -573,7 +573,7 @@ def _ftp_put_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
     verify = _expect_int(args[8], "FTP_PUT_BYTES", location) if len(args) >= 9 else 1
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("FTP_PUT_BYTES: port out of range", location=location, rewrite_rule="FTP_PUT_BYTES")
+        raise PrefixRuntimeError("FTP_PUT_BYTES: port out of range", location=location, rewrite_rule="FTP_PUT_BYTES")
 
     data = _tns_to_bytes(payload, "FTP_PUT_BYTES", location)
     timeout_s = _ms_to_seconds(timeout_ms)
@@ -589,14 +589,14 @@ def _ftp_put_bytes(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _en
                 ftp.close()
         return _make_int(1)
     except Exception as exc:
-        raise ASMRuntimeError(f"FTP_PUT_BYTES failed: {exc}", location=location, rewrite_rule="FTP_PUT_BYTES")
+        raise PrefixRuntimeError(f"FTP_PUT_BYTES failed: {exc}", location=location, rewrite_rule="FTP_PUT_BYTES")
 
 
 # ---- SMTP / SMTPS ----
 
 
 def _smtp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: Any, location: Any) -> Any:
-    from interpreter import ASMRuntimeError
+    from interpreter import PrefixRuntimeError
 
     host = _expect_str(args[0], "SMTP_SEND", location)
     port = _expect_int(args[1], "SMTP_SEND", location)
@@ -611,11 +611,11 @@ def _smtp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: A
     verify = _expect_int(args[10], "SMTP_SEND", location) if len(args) >= 11 else 1
 
     if port < 0 or port > 65535:
-        raise ASMRuntimeError("SMTP_SEND: port out of range", location=location, rewrite_rule="SMTP_SEND")
+        raise PrefixRuntimeError("SMTP_SEND: port out of range", location=location, rewrite_rule="SMTP_SEND")
 
     recipients = [r.strip() for r in mail_to_raw.replace(";", ",").split(",") if r.strip()]
     if not recipients:
-        raise ASMRuntimeError("SMTP_SEND: no recipients", location=location, rewrite_rule="SMTP_SEND")
+        raise PrefixRuntimeError("SMTP_SEND: no recipients", location=location, rewrite_rule="SMTP_SEND")
 
     timeout_s = _ms_to_seconds(timeout_ms)
 
@@ -661,10 +661,10 @@ def _smtp_send(interpreter: Any, args: List[Any], _arg_nodes: List[Any], _env: A
                     pass
         return _make_int(1)
     except Exception as exc:
-        raise ASMRuntimeError(f"SMTP_SEND failed: {exc}", location=location, rewrite_rule="SMTP_SEND")
+        raise PrefixRuntimeError(f"SMTP_SEND failed: {exc}", location=location, rewrite_rule="SMTP_SEND")
 
 
-def asm_lang_register(ext: ExtensionAPI) -> None:
+def prefix_register(ext: ExtensionAPI) -> None:
     ext.metadata(name="networking", version="0.1.0")
 
     # TCP

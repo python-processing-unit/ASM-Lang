@@ -11,7 +11,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tupl
 EXTENSION_API_VERSION = 1
 
 
-class ASMExtensionError(Exception):
+class PrefixExtensionError(Exception):
     pass
 
 
@@ -51,18 +51,18 @@ class TypeRegistry:
     def register(self, spec: TypeSpec, *, seal: bool = False) -> None:
         name = spec.name
         if not name or not isinstance(name, str):
-            raise ASMExtensionError("Type name must be a non-empty string")
+            raise PrefixExtensionError("Type name must be a non-empty string")
         if name in self._types:
-            raise ASMExtensionError(f"Type '{name}' is already defined")
+            raise PrefixExtensionError(f"Type '{name}' is already defined")
         self._types[name] = spec
         if seal:
             self._sealed.add(name)
 
     def ensure_new(self, name: str) -> None:
         if name in self._sealed:
-            raise ASMExtensionError(f"Type '{name}' is sealed and cannot be modified")
+            raise PrefixExtensionError(f"Type '{name}' is sealed and cannot be modified")
         if name in self._types:
-            raise ASMExtensionError(f"Type '{name}' already exists")
+            raise PrefixExtensionError(f"Type '{name}' already exists")
 
     def has(self, name: str) -> bool:
         return name in self._types
@@ -71,7 +71,7 @@ class TypeRegistry:
         try:
             return self._types[name]
         except KeyError:
-            raise ASMExtensionError(f"Unknown type '{name}'")
+            raise PrefixExtensionError(f"Unknown type '{name}'")
 
     def get_optional(self, name: str) -> Optional[TypeSpec]:
         return self._types.get(name)
@@ -107,7 +107,7 @@ class HookRegistry:
 
     def add_step_rule(self, *, name: str, every_n: int, handler: Callable[[Any, StepContext], None], ext_name: str) -> None:
         if every_n <= 0:
-            raise ASMExtensionError("every_n_steps must be >= 1")
+            raise PrefixExtensionError("every_n_steps must be >= 1")
         self._step_rules.append((every_n, handler, ext_name, name))
 
     def after_step(self, interpreter: Any, ctx: StepContext) -> None:
@@ -117,7 +117,7 @@ class HookRegistry:
 
     def register_repl(self, *, name: str, runner: Callable[["ReplContext"], int], ext_name: str) -> None:
         if not name:
-            raise ASMExtensionError("REPL name must be non-empty")
+            raise PrefixExtensionError("REPL name must be non-empty")
         self._repls.append((name, runner, ext_name))
 
     def pick_repl(self) -> Optional[Tuple[str, Callable[["ReplContext"], int], str]]:
@@ -126,7 +126,7 @@ class HookRegistry:
         if len(self._repls) == 1:
             return self._repls[0]
         names = ", ".join(sorted({n for n, _, _ in self._repls}))
-        raise ASMExtensionError(f"Multiple REPL providers registered ({names}); explicit selection not implemented")
+        raise PrefixExtensionError(f"Multiple REPL providers registered ({names}); explicit selection not implemented")
 
 
 @dataclass(frozen=True)
@@ -173,7 +173,7 @@ class ExtensionAPI:
         doc: str = "",
     ) -> None:
         if not name:
-            raise ASMExtensionError("Operator name must be non-empty")
+            raise PrefixExtensionError("Operator name must be non-empty")
         qualified = name
         if self._asmodule:
             prefix = str(self._ext_name)
@@ -213,7 +213,7 @@ class ExtensionAPI:
 
     def type(self, name: str, *, printable: bool = True) -> Callable[[Callable[..., Any]], Callable[..., Any]]:
         def deco(fn: Callable[..., Any]) -> Callable[..., Any]:
-            raise ASMExtensionError("Use register_type(...) explicitly; decorator form not supported")
+            raise PrefixExtensionError("Use register_type(...) explicitly; decorator form not supported")
 
         return deco
 
@@ -280,7 +280,7 @@ def _unique_module_name(path: str) -> str:
     base = os.path.basename(path)
     digest = hashlib.sha256(os.path.abspath(path).encode("utf-8")).hexdigest()[:12]
     safe = "".join(ch if ch.isalnum() else "_" for ch in base)
-    return f"asml_ext_{safe}_{digest}"
+    return f"prefix_ext_{safe}_{digest}"
 
 
 def load_extension_module(path: str) -> Any:
@@ -292,13 +292,13 @@ def load_extension_module(path: str) -> Any:
             if resolved is not None:
                 path = resolved
             else:
-                raise ASMExtensionError(f"Extension not found: {path}")
+                raise PrefixExtensionError(f"Extension not found: {path}")
         else:
-            raise ASMExtensionError(f"Extension not found: {path}")
+            raise PrefixExtensionError(f"Extension not found: {path}")
     mod_name = _unique_module_name(path)
     spec = importlib.util.spec_from_file_location(mod_name, path)
     if spec is None or spec.loader is None:
-        raise ASMExtensionError(f"Failed to load extension module: {path}")
+        raise PrefixExtensionError(f"Failed to load extension module: {path}")
     module = importlib.util.module_from_spec(spec)
 
     # Insert the module into sys.modules before execution so that code
@@ -320,7 +320,7 @@ def load_extension_module(path: str) -> Any:
             else:
                 sys.modules[mod_name] = prev_mod
             # Never allow a Python traceback to escape due to extension code.
-            raise ASMExtensionError(
+            raise PrefixExtensionError(
                 f"Failed to load extension module {path}: {exc.__class__.__name__}: {exc}"
             )
     finally:
@@ -329,9 +329,9 @@ def load_extension_module(path: str) -> Any:
     return module
 
 
-def read_asmx(pointer_file: str) -> List[str]:
+def read_prex(pointer_file: str) -> List[str]:
     if not os.path.exists(pointer_file):
-        raise ASMExtensionError(f".asmxt file not found: {pointer_file}")
+        raise PrefixExtensionError(f".pre file not found: {pointer_file}")
     base_dir = os.path.dirname(os.path.abspath(pointer_file))
     out: List[str] = []
     with open(pointer_file, "r", encoding="utf-8") as handle:
@@ -360,24 +360,24 @@ def read_asmx(pointer_file: str) -> List[str]:
                 if resolved is not None:
                     out.append(resolved)
                     continue
-                raise ASMExtensionError(f"Extension referenced in {pointer_file} not found: {candidate}")
+                raise PrefixExtensionError(f"Extension referenced in {pointer_file} not found: {candidate}")
             else: # absolute path
                 if os.path.exists(candidate): # found as absolute path
                     out.append(os.path.abspath(candidate))
                 else:
-                    raise ASMExtensionError(f"Extension referenced in {pointer_file} not found: {candidate}")
+                    raise PrefixExtensionError(f"Extension referenced in {pointer_file} not found: {candidate}")
     return out
 
 
 def gather_extension_paths(paths: Sequence[str]) -> List[str]:
     expanded: List[str] = []
     for p in paths:
-        if p.lower().endswith(".asmxt"):
+        if p.lower().endswith(".prex"):
             # Resolve pointer file path (absolute if possible) and expand it.
             pointer = p
             if not os.path.isabs(pointer):
                 pointer = os.path.abspath(pointer)
-            expanded.extend(read_asmx(pointer))
+            expanded.extend(read_prex(pointer))
         else:
             # If a relative extension path is provided and doesn't exist in
             # the current working directory, try the interpreter's `ext`
@@ -410,16 +410,16 @@ def load_runtime_services(paths: Sequence[str]) -> RuntimeServices:
     resolved = gather_extension_paths(paths)
     for path in resolved:
         module = load_extension_module(path)
-        api_version = getattr(module, "ASM_LANG_EXTENSION_API_VERSION", EXTENSION_API_VERSION)
+        api_version = getattr(module, "PREFIX_EXTENSION_API_VERSION", EXTENSION_API_VERSION)
         if api_version != EXTENSION_API_VERSION:
-            raise ASMExtensionError(
+            raise PrefixExtensionError(
                 f"Extension {path} requires API {api_version}, host supports {EXTENSION_API_VERSION}"
             )
-        register = getattr(module, "asm_lang_register", None)
+        register = getattr(module, "prefix_register", None)
         if register is None or not callable(register):
-            raise ASMExtensionError(f"Extension {path} must define callable asm_lang_register(ext)")
-        ext_name = getattr(module, "ASM_LANG_EXTENSION_NAME", os.path.splitext(os.path.basename(path))[0])
-        ext_asmodule = bool(getattr(module, "ASM_LANG_EXTENSION_ASMODULE", False))
+            raise PrefixExtensionError(f"Extension {path} must define callable prefix_register(ext)")
+        ext_name = getattr(module, "PREFIX_EXTENSION_NAME", os.path.splitext(os.path.basename(path))[0])
+        ext_asmodule = bool(getattr(module, "PREFIX_EXTENSION_ASMODULE", False))
         ext = ExtensionAPI(services=services, ext_name=str(ext_name), asmodule=ext_asmodule)
         register(ext)
     return services

@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>ASM-Lang Specification</title>
+  <title>Prefix Specification</title>
   <link rel="icon" href="./icon.png" />
   <style>
     @import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
@@ -23,7 +23,7 @@
 # Abstract State Machine Language Specification
 
 <p align="center">
-  <img alt="ASM-Lang icon" src="./icon.png">
+  <img alt="Prefix icon" src="./icon.png">
 </p>
 
 ## Table of contents
@@ -56,7 +56,7 @@ This document specifies an imperative programming language with a binary integer
 
 ## 1. Overview
 
-The language is a familiar statement-based, imperative language. Programs consist of variable declarations via assignment, expressions, and control-flow constructs such as `IF`, `ELSEIF`, `ELSE`, `WHILE`, and `FOR`. ASM-Lang has seven runtime data types: binary integers (`INT`), binary floating-point numbers (`FLT`, IEEE754), strings (`STR`), non-scalar tensors (`TNS`), first-class user-defined functions (`FUNC`), associative maps (`MAP`), and thread handles (`THR`). Identifiers, function parameters, and return values are statically typed; the type of every symbol must be declared when it is first introduced. Computation proceeds by evaluating expressions and executing statements in sequence, with explicit constructs for branching and looping. Input and output are modeled through built-in operators, in particular `INPUT` and `PRINT`.
+The language is a familiar statement-based, imperative language. Programs consist of variable declarations via assignment, expressions, and control-flow constructs such as `IF`, `ELSEIF`, `ELSE`, `WHILE`, and `FOR`. Prefix has seven runtime data types: binary integers (`INT`), binary floating-point numbers (`FLT`, IEEE754), strings (`STR`), non-scalar tensors (`TNS`), first-class user-defined functions (`FUNC`), associative maps (`MAP`), and thread handles (`THR`). Identifiers, function parameters, and return values are statically typed; the type of every symbol must be declared when it is first introduced. Computation proceeds by evaluating expressions and executing statements in sequence, with explicit constructs for branching and looping. Input and output are modeled through built-in operators, in particular `INPUT` and `PRINT`.
 
 The interpreter compiles source code into a single initial configuration (the seed state), which includes the program code, an empty variable environment, and an initial I/O history. It then advances execution by repeatedly applying a single, fixed small-step transition function that is independent of the particular program. A disassembler and log view expose all intermediate states so that every step and every control-flow decision is inspectable and replay-able.
 
@@ -116,7 +116,7 @@ The `@` character is a dedicated lexical token (not part of an identifier). When
 
 ## 3. Data Model
 
-ASM-Lang supports seven runtime data types: binary integers, binary floating-point numbers, strings, non-scalar tensors, first-class functions, associative maps, and thread handles.
+Prefix supports seven runtime data types: binary integers, binary floating-point numbers, strings, non-scalar tensors, first-class functions, associative maps, and thread handles.
 
 Binary integer literal: an unsigned non-empty sequence of `{0,1}` (for example, `0`, `1`, `1011`), or a signed literal formed by a leading `-` (the dash is part of the literal, not an operator) followed by optional spaces, tabs, or carriage returns and then a non-empty sequence of `{0,1}`. A `-` that does not immediately introduce a literal is a syntax error.
 
@@ -177,7 +177,7 @@ Tensor literal: a non-empty bracketed collection of expressions. Each pair of ma
 Expressions inside a tensor literal may themselves evaluate to `INT`, `FLT`, `STR`, or `TNS`. If an element expression evaluates to a tensor value, it occupies a single position and does not contribute additional dimensions; only the explicit bracket structure determines the shape. A tensor literal that mixes sub-brackets of differing lengths is invalid (for example, `[[0,0,0],[1,1]]`).
 
 
-Map literal and `MAP` type: In addition to tensors, ASM-Lang provides an N-dimensional associative map type `MAP` whose literal form uses angle brackets and key/value pairs. A map literal is written as `<key1 = value1, key2 = value2, ...>`. Values may themselves be maps, allowing nested associative structures. Examples:
+Map literal and `MAP` type: In addition to tensors, Prefix provides an N-dimensional associative map type `MAP` whose literal form uses angle brackets and key/value pairs. A map literal is written as `<key1 = value1, key2 = value2, ...>`. Values may themselves be maps, allowing nested associative structures. Examples:
 
 - `<"foo" = 1, "bar" = 10>` is a 1-level map with string keys.
 - `<"outer" = <"inner" = 1>, "other" = 0>` nests a map value under key `"outer"`.
@@ -286,7 +286,7 @@ The language assumes at least a global typed environment mapping identifiers to 
 
 ### Pointers
 
-ASM-Lang supports pointer (alias) literals using the `@` prefix. A pointer literal has the form `@name` where `name` is an existing identifier in the visible lexical environment. The `@` token is syntactically distinct from identifiers (see Section 2); it cannot appear inside an identifier name.
+Prefix supports pointer (alias) literals using the `@` prefix. A pointer literal has the form `@name` where `name` is an existing identifier in the visible lexical environment. The `@` token is syntactically distinct from identifiers (see Section 2); it cannot appear inside an identifier name.
 
 - Creation: evaluating `@name` produces a pointer value that refers to the binding named `name`. If `name` is undefined an error is raised. Pointer creation resolves any existing chain of pointers so that the created alias ultimately references the non-pointer target.
 
@@ -312,7 +312,7 @@ Every state produced during execution is serializable and human-readable. The in
 
 ## 8. Standard Library
 
-The standard library is a group of modules for common use cases distributed with the interpreter. at the ASM-Lang directory \lib (or /lib on non-Windows systems).
+The standard library is a group of modules for common use cases distributed with the interpreter. at the Prefix directory \lib (or /lib on non-Windows systems).
 
 ## 9. Tracebacks and Error Reporting
 
@@ -390,10 +390,10 @@ The trace must clearly identify the point of origin (the expression or statement
 
 ```
 Traceback (most recent call last):
-  File "prog.asmln", line 21, in <top-level>
+  File "prog.pre", line 21, in <top-level>
     result = compute(foo, bar)
     State log index: 121  State id: s_0121
-  File "lib.asmln", line 88, in compute
+  File "lib.pre", line 88, in compute
     x = DIV(a, b)
     State log index: 123  State id: s_0123
 DivisionByZero: attempted to DIV by zero at step_index=123 (rewrite: DIV)
@@ -409,13 +409,13 @@ This section documents how the reference interpreter accepts program input and h
 
 - Extensions: the interpreter may also accept zero or more *extension* arguments that load Python extension modules before parsing and execution. Extensions may add new operators, new runtime types, and runtime hooks (including custom REPL implementations), but MUST NOT replace or modify existing built-in operators or types.
 
-  - A Python extension is a `.py` file that defines `ASM_LANG_EXTENSION_API_VERSION = 1` (optional; defaults to 1) and a callable `asm_lang_register(ext)` entrypoint.
+  - A Python extension is a `.py` file that defines `PREFIX_EXTENSION_API_VERSION = 1` (optional; defaults to 1) and a callable `prefix_register(ext)` entrypoint.
   
-  - A pointer file is a `.asmxt` text file containing one extension path per line. Lines are trimmed; blank lines are ignored; lines beginning with `#` are comments. Relative paths are resolved relative to the `.asmxt` file's directory; when a referenced path is not found there the interpreter will also try the current working directory and, as a final fallback, the interpreter's own `ext/` subdirectory.
+  - A pointer file is a `.prex` text file containing one extension path per line. Lines are trimmed; blank lines are ignored; lines beginning with `#` are comments. Relative paths are resolved relative to the `.prex` file's directory; when a referenced path is not found there the interpreter will also try the current working directory and, as a final fallback, the interpreter's own `ext/` subdirectory.
   
-  - If a `.asmxt` file is supplied as an argument, all of the linked extensions are loaded.
+  - If a `.prex` file is supplied as an argument, all of the linked extensions are loaded.
   
-  - If no explicit extension arguments are provided, the interpreter will automatically look for a pointer file named `.asmxt` in the current working directory. When a program path is being executed (not when `-source` is used), the interpreter also checks the program's directory for a `.asmxt` pointer file and will additionally accept a pointer file that shares the program's basename but ends with `.asmxt` (for example `program.asmln` alongside `program.asmxt`). If any pointer file is found the extensions listed in that pointer file are loaded as if supplied on the command line.
+  - If no explicit extension arguments are provided, the interpreter will automatically look for a pointer file named `.prex` in the current working directory. When a program path is being executed (not when `-source` is used), the interpreter also checks the program's directory for a `.prex` pointer file and will additionally accept a pointer file that shares the program's basename but ends with `.prex` (for example `program.pre` alongside `program.prex`). If any pointer file is found the extensions listed in that pointer file are loaded as if supplied on the command line.
   
   - Extensions are loaded before parsing so that extension-defined type names are recognized in typed assignments and function signatures.
   
@@ -423,7 +423,7 @@ This section documents how the reference interpreter accepts program input and h
   
   - Hook surfaces exposed by the reference implementation include:
 
-    - Operators: additional call names dispatched like built-ins. Extensions may opt into module-qualifying all of their operators by defining the module-level flag `ASM_LANG_EXTENSION_ASMODULE = True`. When an extension sets this flag every operator it registers will be exposed under the extension's name as a dotted prefix (for example, an extension named `mymod` registering `FOO` will expose `mymod.FOO`). This mirrors imported module-qualified bindings and avoids global name collisions.
+    - Operators: additional call names dispatched like built-ins. Extensions may opt into module-qualifying all of their operators by defining the module-level flag `PREFIX_EXTENSION_ASMODULE = True`. When an extension sets this flag every operator it registers will be exposed under the extension's name as a dotted prefix (for example, an extension named `mymod` registering `FOO` will expose `mymod.FOO`). This mirrors imported module-qualified bindings and avoids global name collisions.
 
     - Per-N-steps rules: `every_n_steps(N, handler)` runs the handler after state-log step indices where `step_index % N == 0`.
 
@@ -449,21 +449,21 @@ Notes:
 
 Example invocations (illustrative):
 
-- File mode: `asm-lang program.asmln`
+- File mode: `prefix program.pre`
 
-- Source-string mode: `asm-lang -source "foo = INPUT\nPRINT(foo)" -verbose`
+- Source-string mode: `prefix -source "foo = INPUT\nPRINT(foo)" -verbose`
 
-- With extensions (file mode): `asm-lang myext.py program.asmln`
+- With extensions (file mode): `prefix myext.py program.pre`
 
-- With pointer file: `asm-lang extensions.asmxt program.asmln`
+- With pointer file: `prefix extensions.prex program.pre`
 
-- REPL / Interactive mode: `asm-lang` (no program argument), or `asm-lang myext.py` (extensions only)
+- REPL / Interactive mode: `prefix` (no program argument), or `prefix myext.py` (extensions only)
 
 ## 11. REPL (Interactive Mode)
 
-When the interpreter is invoked without a program path or a `-source` string argument it enters an interactive read–eval–print loop (REPL). The REPL is a convenient development and exploration environment that executes ASM-Lang statements using the same parser, runtime, built-ins, and state-logging semantics as file-mode execution. The following rules describe REPL behaviour:
+When the interpreter is invoked without a program path or a `-source` string argument it enters an interactive read–eval–print loop (REPL). The REPL is a convenient development and exploration environment that executes Prefix statements using the same parser, runtime, built-ins, and state-logging semantics as file-mode execution. The following rules describe REPL behaviour:
 
-- Invocation: running `asm-lang` with no program argument launches the REPL. If one or more extensions are supplied and no program argument is supplied, the interpreter launches a REPL with those extensions loaded; if an extension provides a replacement REPL, that REPL may be used.
+- Invocation: running `prefix` with no program argument launches the REPL. If one or more extensions are supplied and no program argument is supplied, the interpreter launches a REPL with those extensions loaded; if an extension provides a replacement REPL, that REPL may be used.
 
 - Prompting and input: the REPL presents a primary prompt for new top-level input and a continuation prompt while the user is entering a multi-line block (for example, the body of `FUNC`, `IF`, `WHILE`, or `FOR`).
 
@@ -477,7 +477,7 @@ When the interpreter is invoked without a program path or a `-source` string arg
 
 Notes and examples:
 
-- Start REPL: `asm-lang`
+- Start REPL: `prefix`
 
 - Exit via meta-command: type `.exit` or press Ctrl-D (EOF)
 
@@ -498,7 +498,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
 ### 12.1 Function / Operator Signatures (expression position)
 
-- `RUN(STR: s)` ; Run a string as an ASM-Lang program within the current environment;
+- `RUN(STR: s)` ; Run a string as an Prefix program within the current environment;
 
 - `ASSERT(ANY: a)` ; crashes if `INT`-style` truthiness of `a` is 0
 
@@ -810,11 +810,11 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
 - `IMPORT(MODULE: name)` or `IMPORT(MODULE: name, SYMBOL: alias)` — Loads another source file and exposes it as a distinct module namespace. When an optional alias identifier is supplied, the imported module's bindings are exposed under the `alias` prefix rather than the module's own name (for example, `IMPORT(mod, ali)` makes `ali.F()` valid while `mod.F()` is not).
 
-  Package imports: ASM-Lang supports package namespaces using `..` as the package separator. The canonical form is `package..subpackage..module`. When `IMPORT(pkg)` is used the interpreter will prefer a package layout and attempt to load `pkg/init.asmln` from the referring source's directory (falling back to the interpreter `lib/` directory). If a directory named `pkg` exists but contains no `init.asmln` the import raises a clear error. When `IMPORT(pkg..mod)` is used the interpreter resolves to `pkg/mod.asmln` (or the corresponding file under `lib/`). When a package directory and a same-named module file both exist in the same search location, the package takes precedence. Items within the package are still imported using their full dotted names (for example, `pkg..mod.FOO`).
+  Package imports: Prefix supports package namespaces using `..` as the package separator. The canonical form is `package..subpackage..module`. When `IMPORT(pkg)` is used the interpreter will prefer a package layout and attempt to load `pkg/init.pre` from the referring source's directory (falling back to the interpreter `lib/` directory). If a directory named `pkg` exists but contains no `init.pre` the import raises a clear error. When `IMPORT(pkg..mod)` is used the interpreter resolves to `pkg/mod.pre` (or the corresponding file under `lib/`). When a package directory and a same-named module file both exist in the same search location, the package takes precedence. Items within the package are still imported using their full dotted names (for example, `pkg..mod.FOO`).
 
-- `IMPORT_PATH(STR: path)` — Loads an ASM-Lang module from the absolute filesystem `path` provided as a `STR`. The argument must be an absolute path to a `.asmln` source file. The imported module is treated the same as `IMPORT` with respect to parsing, execution isolation, function/module caching, and companion extension loading (companion `<module>.asmxt` alongside the resolved file and a built-in `ext/<module>.py` are both checked and loaded if present). The module's basename (filename without extension) is used as the module identifier for qualifying exported bindings.
+- `IMPORT_PATH(STR: path)` — Loads an Prefix module from the absolute filesystem `path` provided as a `STR`. The argument must be an absolute path to a `.pre` source file. The imported module is treated the same as `IMPORT` with respect to parsing, execution isolation, function/module caching, and companion extension loading (companion `<module>.prex` alongside the resolved file and a built-in `ext/<module>.py` are both checked and loaded if present). The module's basename (filename without extension) is used as the module identifier for qualifying exported bindings.
 
-  The first argument must be an identifier naming a module; the interpreter first looks for a file named `<name>.asmln` in the same directory as the referring source file. When the referring source is provided via the `-source` string literal mode, the primary search directory is the process's current working directory. If the module file is not found there, the interpreter will additionally attempt to load the file from a `lib` subdirectory located alongside the interpreter implementation (that is, `<interpreter_dir>/lib/<name>.asmln`, where `<interpreter_dir>` is the directory containing the interpreter script or executable).
+  The first argument must be an identifier naming a module; the interpreter first looks for a file named `<name>.pre` in the same directory as the referring source file. When the referring source is provided via the `-source` string literal mode, the primary search directory is the process's current working directory. If the module file is not found there, the interpreter will additionally attempt to load the file from a `lib` subdirectory located alongside the interpreter implementation (that is, `<interpreter_dir>/lib/<name>.pre`, where `<interpreter_dir>` is the directory containing the interpreter script or executable).
 
   The imported file is parsed and executed in its own isolated top-level environment on the first import during a given interpreter invocation: top-level assignments and function definitions in the imported module do not directly mutate the caller's environment during execution. During that execution unqualified identifiers (for example, `x` or `helper`) refer to names in the module's own top-level namespace. Qualified identifiers (for example, `other.FOO`) refer only to the dotted names that the module itself has created or imported; those qualified bindings are scoped to the module's namespace.
 
@@ -822,7 +822,7 @@ Tensor indexing uses the expression form `tensor[i1, i2, ..., iN]`. The number o
 
   This caching behavior ensures that importing a module multiple times produces the same shared module namespace instance for all importers. The interpreter does not automatically perform cycle detection beyond using the cached instance once execution has completed; careful module design should avoid import cycles where possible.
   
-  When a module is imported, the interpreter also attempts to load any associated runtime extensions so their operators are immediately available to the importer. The interpreter first looks for a companion pointer file named `<module>.asmxt` next to the resolved module file (or in the interpreter `lib/` fallback) and loads any extensions listed there. If no pointer file is present (or as an additional fallback), the interpreter will also check its built-in `ext/` directory for a single-file extension named `<module>.py` and load it if present. Operators registered by such extensions are attached to the running interpreter at import time and become callable (typically under the module-qualified names they register).
+  When a module is imported, the interpreter also attempts to load any associated runtime extensions so their operators are immediately available to the importer. The interpreter first looks for a companion pointer file named `<module>.prex` next to the resolved module file (or in the interpreter `lib/` fallback) and loads any extensions listed there. If no pointer file is present (or as an additional fallback), the interpreter will also check its built-in `ext/` directory for a single-file extension named `<module>.py` and load it if present. Operators registered by such extensions are attached to the running interpreter at import time and become callable (typically under the module-qualified names they register).
 
 - `EXPORT(SYMBOL: symbol, MODULE: module):INT` — Adds the caller's binding for the identifier `symbol` into the namespace of the imported module named by the identifier `module`. The first argument must be an identifier (not a string literal); its current value in the caller's environment is copied into the imported module's namespace and becomes available as the qualified name `module.symbol` in the caller's environment. The second argument must be an identifier naming a previously-imported module; if the module has not been imported yet, the interpreter raises a runtime error (rewrite: EXPORT). `EXPORT` returns `INT` 0 on success.
 
